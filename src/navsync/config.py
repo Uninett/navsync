@@ -18,4 +18,5 @@ settings = Dynaconf(
         ),
         Validator("netbox.token", must_exist=True),
     ],
+    validate_only="netbox",
 )
