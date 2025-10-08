@@ -16,3 +16,15 @@ class NavServerInfo:
     url: str
     owner_id: int
     tenant_id: int
+
+
+def url_with_https(url: str):
+    if not url.lower().startswith("https://"):
+        return "https://" + url
+    return url
+
+
+def url_with_http(url: str):
+    if not url.lower().startswith("http://"):
+        return "http://" + url
+    return url
