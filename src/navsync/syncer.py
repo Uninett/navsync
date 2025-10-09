@@ -1,7 +1,8 @@
 import argparse
+import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Iterable
+from typing import Iterable, Sequence
 
 import jwt
 import pynetbox.core.api as netbox
@@ -12,10 +13,16 @@ from navsync.parser import (
     Device,
     NameStr,
     PhysicalChassis,
+    Site,
     VirtualChassis,
+    get_locations_from_devices,
     get_netbox_entities,
+    get_sites_from_locations,
 )
 from navsync.utils import NavServerInfo, init_logging, url_with_http, url_with_https
+
+
+_logger = logging.getLogger(__name__)
 
 
 EXAMPLE_CONFIG = """\
@@ -122,7 +129,11 @@ class Syncer:
         Syncs all navboxes from all NAV server instances found on the Netbox
         server to Netbox
         """
-        raise NotImplementedError()
+        _, devices = self._get_virtual_chassises_and_devices()
+        locations = get_locations_from_devices(devices.values())
+        sites = get_sites_from_locations(locations)
+
+        self._sync_sites(sites)
 
     @classmethod
     def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
@@ -147,6 +158,59 @@ class Syncer:
             issuer=nav_iss_claim,
             https=https,
         )
+
+    def _sync_sites(self, sites: Sequence[Site]):
+        upstream_sites = self.netbox_api.dcim.sites.all()
+
+        # Make indexes for quicker lookups later
+        upstream_sites_by_slug = {}
+        upstream_sites_by_phys_address = {}
+        for upstream_site in upstream_sites:
+            upstream_sites_by_slug[upstream_site.slug] = upstream_site
+            upstream_sites_by_phys_address[upstream_site.physical_address] = (
+                upstream_site
+            )
+
+        for site in sites:
+            upstream_site = upstream_sites_by_slug.get(
+                site.slug
+            ) or upstream_sites_by_phys_address.get(site.physical_address)
+
+            if upstream_site:
+                if not upstream_site.latitude and not upstream_site.longitude:
+                    upstream_site.latitude = f"{site.latitude:.6f}"
+                    upstream_site.longitude = f"{site.longitude:.6f}"
+                if not upstream_site.tenant:
+                    upstream_site.tenant = site.tenant
+                if not upstream_site.description and site.description:
+                    upstream_site.description = site.description
+                if not upstream_site.comments and site.comments:
+                    upstream_site.comments = site.comments
+                if not upstream_site.physical_address and site.physical_address:
+                    upstream_site.physical_address = site.physical_address
+                upstream_site.status = site.status
+                _logger.debug(f"Updating site {upstream_site.name}")
+                upstream_site.save()
+            else:
+                new_site_dict = {
+                    "latitude": f"{site.latitude:.6f}",
+                    "longitude": f"{site.longitude:.6f}",
+                    "tenant": site.tenant,
+                    "status": site.status,
+                    "name": site.name,
+                    "slug": site.slug,
+                    "tags": site.tags,
+                }
+                if site.physical_address:
+                    new_site_dict["physical_address"] = site.physical_address
+                if site.comments:
+                    new_site_dict["comments"] = site.comments
+                if site.description:
+                    new_site_dict["description"] = site.description
+                if site.region:
+                    new_site_dict["region"] = site.region
+                _logger.debug(f"Creating new site {site.name}")
+                self.netbox_api.dcim.sites.create(**new_site_dict)
 
     def _get_virtual_chassises_and_devices(
         self,
