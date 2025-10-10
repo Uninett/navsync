@@ -17,6 +17,9 @@ settings = Dynaconf(
             condition=lambda v: v.startswith("http://") or v.startswith("https://"),
         ),
         Validator("netbox.token", must_exist=True),
+        Validator("nav.private_key_path", must_exist=True),
+        Validator("nav.expiry_delta", must_exist=True),
+        Validator("nav.issuer", must_exist=True),
     ],
     validate_only="netbox",
 )
