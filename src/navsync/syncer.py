@@ -4,7 +4,8 @@ from datetime import timedelta
 import pynetbox.core.api as netbox
 from dynaconf import Dynaconf
 
-from navsync import config, utils
+from navsync import config
+from navsync import utils
 
 EXAMPLE_CONFIG = """\
 [netbox]
