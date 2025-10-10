@@ -1,11 +1,29 @@
 import argparse
-from datetime import timedelta
+import logging
+import time
+from datetime import datetime, timedelta, timezone
+from typing import Iterable, Sequence
 
+import jwt
 import pynetbox.core.api as netbox
 from dynaconf import Dynaconf
 
 from navsync import config
-from navsync import utils
+from navsync.parser import (
+    Device,
+    NameStr,
+    PhysicalChassis,
+    Site,
+    VirtualChassis,
+    get_locations_from_devices,
+    get_netbox_entities,
+    get_sites_from_locations,
+)
+from navsync.utils import NavServerInfo, init_logging, url_with_http, url_with_https
+
+
+_logger = logging.getLogger(__name__)
+
 
 EXAMPLE_CONFIG = """\
 [netbox]
@@ -46,7 +64,7 @@ https=true
 
 def main():
     args = parse_args()
-    utils.init_logging(args.loglevel)
+    init_logging(args.loglevel)
     settings = config.settings
     settings.validators.validate(only=["nav"])
     syncer = Syncer.from_settings(settings, args)
@@ -111,7 +129,11 @@ class Syncer:
         Syncs all navboxes from all NAV server instances found on the Netbox
         server to Netbox
         """
-        raise NotImplementedError()
+        _, devices = self._get_virtual_chassises_and_devices()
+        locations = get_locations_from_devices(devices.values())
+        sites = get_sites_from_locations(locations)
+
+        self._sync_sites(sites)
 
     @classmethod
     def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
@@ -136,6 +158,162 @@ class Syncer:
             issuer=nav_iss_claim,
             https=https,
         )
+
+    def _sync_sites(self, sites: Sequence[Site]):
+        upstream_sites = self.netbox_api.dcim.sites.all()
+
+        # Make indexes for quicker lookups later
+        upstream_sites_by_slug = {}
+        upstream_sites_by_phys_address = {}
+        for upstream_site in upstream_sites:
+            upstream_sites_by_slug[upstream_site.slug] = upstream_site
+            upstream_sites_by_phys_address[upstream_site.physical_address] = (
+                upstream_site
+            )
+
+        for site in sites:
+            upstream_site = upstream_sites_by_slug.get(
+                site.slug
+            ) or upstream_sites_by_phys_address.get(site.physical_address)
+
+            if upstream_site:
+                if not upstream_site.latitude and not upstream_site.longitude:
+                    upstream_site.latitude = f"{site.latitude:.6f}"
+                    upstream_site.longitude = f"{site.longitude:.6f}"
+                if not upstream_site.tenant:
+                    upstream_site.tenant = site.tenant
+                if not upstream_site.description and site.description:
+                    upstream_site.description = site.description
+                if not upstream_site.comments and site.comments:
+                    upstream_site.comments = site.comments
+                if not upstream_site.physical_address and site.physical_address:
+                    upstream_site.physical_address = site.physical_address
+                upstream_site.status = site.status
+                _logger.debug(f"Updating site {upstream_site.name}")
+                upstream_site.save()
+            else:
+                new_site_dict = {
+                    "latitude": f"{site.latitude:.6f}",
+                    "longitude": f"{site.longitude:.6f}",
+                    "tenant": site.tenant,
+                    "status": site.status,
+                    "name": site.name,
+                    "slug": site.slug,
+                    "tags": site.tags,
+                }
+                if site.physical_address:
+                    new_site_dict["physical_address"] = site.physical_address
+                if site.comments:
+                    new_site_dict["comments"] = site.comments
+                if site.description:
+                    new_site_dict["description"] = site.description
+                if site.region:
+                    new_site_dict["region"] = site.region
+                _logger.debug(f"Creating new site {site.name}")
+                self.netbox_api.dcim.sites.create(**new_site_dict)
+
+    def _get_virtual_chassises_and_devices(
+        self,
+    ) -> tuple[dict[NameStr, VirtualChassis], dict[NameStr, Device]]:
+        entities = []
+        for nav_server in self._get_nav_servers():
+            token = self._generate_nav_token(aud=nav_server.url)
+            # Sleep to avoid issues with the `nbf` claim.
+            time.sleep(1)
+            entities.extend(get_netbox_entities(nav_server, token))
+
+        virtual_chassises: dict[NameStr, VirtualChassis] = {}
+        devices: dict[NameStr, Device] = {}
+
+        for entity in entities:
+            match entity:
+                case VirtualChassis():
+                    if entity.name in virtual_chassises:
+                        raise ValueError(
+                            f"Duplicate virtual chassis name {entity.name} found in NAV server {nav_server.url}"
+                        )
+                    virtual_chassises[entity.name] = entity
+                    for device in entity.devices:
+                        if device.name in devices:
+                            raise ValueError(
+                                f"Duplicate device name {device.name} found in NAV server {nav_server.url}"
+                            )
+                        devices[device.name] = device
+                case PhysicalChassis():
+                    if entity.name in devices:
+                        raise ValueError(
+                            f"Duplicate device name {entity.name} found in NAV server {nav_server.url}"
+                        )
+                    devices[entity.name] = entity
+                case _:
+                    raise TypeError(f"Unexpected entity type {type(entity)}")
+
+        return virtual_chassises, devices
+
+    def _generate_nav_token(self, aud: str):
+        now = datetime.now(timezone.utc)
+        jwt_claims = {
+            "exp": (now + self.expiry_delta).timestamp(),
+            "nbf": now.timestamp(),
+            "iat": now.timestamp(),
+            "aud": aud,
+            "iss": self.issuer,
+            "token_type": "access",
+            "endpoints": ["/api/1/netbox", "/api/1/netboxentity", "/api/1/location"],
+            "write": False,
+        }
+        return jwt.encode(jwt_claims, self.private_key, algorithm="RS256")
+
+    def _get_nav_servers(self) -> Iterable[NavServerInfo]:
+        """
+        For each NAV server instance found on the Netbox server, yields a
+        namespace containing that instance's url, owner, and tenant
+        """
+        virtual_machines = self.netbox_api.virtualization.virtual_machines.filter(
+            role="verktykasse", status="active"
+        )
+        devices = self.netbox_api.dcim.devices.filter(
+            role="verktykasse", status="active"
+        )
+
+        for vm in virtual_machines:
+            if "owner" not in vm.custom_fields:
+                self.log_netbox_insufficiency(
+                    None, vm, "custom_fields", "Missing 'owner'"
+                )
+                continue
+            if not hasattr(vm.custom_fields["owner"], "id"):
+                self.log_netbox_insufficiency(
+                    None, vm, "custom_fields", "'owner' should be a Tenant with an 'id'"
+                )
+                continue
+            yield NavServerInfo(
+                url=self.get_url_from_name(vm.name),
+                owner_id=vm.custom_fields["owner"].id,
+                tenant_id=vm.tenant.id,
+            )
+
+        for device in devices:
+            asset = self.netbox_api.plugins.inventory.assets.get(device=device)
+            if not asset:
+                self.log_netbox_insufficiency(
+                    None, device, None, "No asset assigned to device"
+                )
+                continue
+            if not hasattr(asset, "tenant") or asset.tenant is None:
+                self.log_netbox_insufficiency(None, asset, "tenant", "Missing tenant")
+                continue
+            yield NavServerInfo(
+                url=self._get_url_from_name(device.name),
+                owner_id=asset.owner.id,
+                tenant_id=asset.tenant.id,
+            )
+
+    def _get_url_from_name(self, device_name: str) -> str:
+        if self.https:
+            return url_with_https(device_name)
+        else:
+            return url_with_http(device_name)
 
 
 if __name__ == "__main__":

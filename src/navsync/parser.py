@@ -182,6 +182,36 @@ def get_netbox_entities(
     return netbox_entities
 
 
+def get_locations_from_devices(
+    devices: Sequence[Device],
+) -> list[Location]:
+    """Extracts unique locations from a sequence of devices"""
+    locations = []
+    name_set = set()
+    for device in devices:
+        location = device.location
+        # Only include one location per name
+        if location.name not in name_set:
+            locations.append(location)
+            name_set.add(location.name)
+    return locations
+
+
+def get_sites_from_locations(
+    locations: Sequence[Location],
+) -> list[Site]:
+    """Extracts unique sites from a sequence of locations"""
+    sites = []
+    slug_set = set()
+    for location in locations:
+        site = location.site
+        # Only include one site per slug
+        if site.slug not in slug_set:
+            sites.append(site)
+            slug_set.add(site.slug)
+    return sites
+
+
 def _try_parse_standard_virtual_chassis(
     navbox: NavBox, navinfo: NavServerInfo
 ) -> VirtualChassis:
