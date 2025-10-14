@@ -41,11 +41,14 @@ class Location:
 
     name: str
     tags: list[str]
-    tenant: int | str
+    tenant: int
     site: Site
     description: str | None = None
     comments: str | None = None
     parent: str | Self | None = None
+    status: Literal["active", "decommissioning", "planned", "retired", "staging"] = (
+        "active"
+    )
 
 
 @dataclass
