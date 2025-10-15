@@ -144,6 +144,7 @@ class Syncer:
 
         self._sync_sites(sites)
         self._sync_locations(locations)
+        self._sync_devices(devices.values())
 
     @classmethod
     def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
@@ -169,12 +170,67 @@ class Syncer:
             https=https,
         )
 
+    def _sync_devices(self, devices: Sequence[Device]):
+        upstream_devices_by_name = self._get_upstream_devices()
+        upstream_sites = self._get_upstream_sites()
+        upstream_locations_by_name = self._get_upstream_locations()
+        upstream_device_type_by_part_number = self._get_upstream_device_types()
+        upstream_device_roles_by_name = self._get_upstream_device_roles()
+        upstream_tenants_by_name = self._get_upstream_tenants()
+
+        for device in devices:
+            upstream_device = upstream_devices_by_name.get(device.name)
+            tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
+            if upstream_device:
+                if not upstream_device.tenant and (
+                    upstream_tenant := upstream_tenants_by_name.get(device.tenant)
+                ):
+                    upstream_device.tenant = upstream_tenant.id
+                tag_ids += [
+                    tag.id for tag in upstream_device.tags if tag.id not in tag_ids
+                ]
+                upstream_device.tags = tag_ids
+                if upstream_device.updates():
+                    _logger.debug(f"Updating device {upstream_device.name}")
+                    upstream_device.save()
+            else:
+                upstream_site = self._get_upstream_site(
+                    upstream_sites, device.location.site
+                )
+                if not upstream_site:
+                    raise ValueError(
+                        f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
+                    )
+                upstream_device_type = upstream_device_type_by_part_number.get(
+                    device.model
+                )
+                if not upstream_device_type:
+                    _logger.error(
+                        f"Could not find device_type for model {device.model}. Skipping device {device.name}"
+                    )
+                    continue
+                upstream_device_role = upstream_device_roles_by_name.get(device.role)
+                if not upstream_device_type:
+                    raise ValueError(f"Could not find device_role {device.role}")
+                new_device_dict = {
+                    "name": device.name,
+                    "device_type": upstream_device_type.id,
+                    "role": upstream_device_role.id,
+                    "site": upstream_site.id,
+                    "tags": tag_ids,
+                }
+                if upstream_location := upstream_locations_by_name.get(
+                    device.location.name
+                ):
+                    new_device_dict["location"] = upstream_location.id
+                if upstream_tenant := upstream_tenants_by_name.get(device.tenant):
+                    new_device_dict["tenant"] = upstream_tenant.id
+                _logger.debug(f"Creating new device {device.name}")
+                self.netbox_api.dcim.devices.create(**new_device_dict)
+
     def _sync_locations(self, locations: Sequence[Location]):
         upstream_sites = self._get_upstream_sites()
-
-        upstream_locations_by_name = {
-            location.name: location for location in self.netbox_api.dcim.locations.all()
-        }
+        upstream_locations_by_name = self._get_upstream_locations()
 
         for location in locations:
             upstream_location = upstream_locations_by_name.get(location.name)
@@ -280,6 +336,34 @@ class Syncer:
                     )
                     existing_tags[created_tag.name] = created_tag.id
         return existing_tags
+
+    def _get_upstream_tenants(self) -> dict[NameStr, Record]:
+        """Returns dict mapping name to tenant"""
+        return {tenant.name: tenant for tenant in self.netbox_api.tenancy.tenants.all()}
+
+    def _get_upstream_device_types(self) -> dict[str, Record]:
+        """Returns dict mapping part number to device type"""
+        return {
+            device_type.part_number: device_type
+            for device_type in self.netbox_api.dcim.device_types.all()
+        }
+
+    def _get_upstream_device_roles(self) -> dict[NameStr, Record]:
+        """Returns dict mapping name to device role"""
+        return {
+            device_role.name: device_role
+            for device_role in self.netbox_api.dcim.device_roles.all()
+        }
+
+    def _get_upstream_locations(self) -> dict[NameStr, Record]:
+        """Returns dict mapping name to location"""
+        return {
+            location.name: location for location in self.netbox_api.dcim.locations.all()
+        }
+
+    def _get_upstream_devices(self) -> dict[NameStr, Record]:
+        """Returns dict mapping name to device"""
+        return {device.name: device for device in self.netbox_api.dcim.devices.all()}
 
     def _get_upstream_sites(self) -> list[Record]:
         return list(self.netbox_api.dcim.sites.all())

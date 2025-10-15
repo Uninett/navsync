@@ -72,9 +72,10 @@ class Device:
 
     name: str
     tags: list[str]
-    tenant: int | str
+    tenant: str
     asset: Asset
     location: Location
+    role: Literal["router", "switch", "unknown", "PDU"]
     manufacturer: ManufacturerStr | None = None
     model: ModelStr | None = None
     vc_position: int | None = None
@@ -424,10 +425,23 @@ def _parse_device(
         manufacturer=navbox.type_vendor.lower()
         if navbox.type_vendor is not None
         else None,
-        model=navbox.type_name.lower() if navbox.type_name is not None else None,
+        model=navbox.type_name.upper() if navbox.type_name is not None else None,
         asset=_parse_asset(navbox, physical_chassis, owner_id),
         location=_parse_location(navbox, owner_id),
+        role=_get_device_role_from_navbox(navbox),
     )
+
+
+def _get_device_role_from_navbox(navbox: NavBox) -> str:
+    category = navbox.category
+    if category == "GW":
+        return "router"
+    elif category == "GWS" or category == "SW":
+        return "switch"
+    elif category == "POWER":
+        return "PDU"
+    else:
+        return "unknown"
 
 
 def _parse_asset(navbox: NavBox, entity: NavBoxEntity, owner_id: int) -> Asset:
