@@ -55,14 +55,15 @@ class Location:
 class Asset:
     """Information about a Netbox asset instance"""
 
-    serial: SerialStr | None
     tags: list[str]
-    manufacturer: ManufacturerStr | None
-    model: ModelStr | None
+    tenant: str
+    owner: int
+    status: Literal["stored", "used", "retired"] = "used"
+    serial: SerialStr | None = None
+    manufacturer: ManufacturerStr | None = None
+    model: ModelStr | None = None
     comments: str | None = None
-    tenant: int | str | None = None
     contact: int | str | None = None
-    owner: int | str | None = None
     navbox: NavBox | None = None
 
 
@@ -446,12 +447,14 @@ def _get_device_role_from_navbox(navbox: NavBox) -> str:
 
 def _parse_asset(navbox: NavBox, entity: NavBoxEntity, owner_id: int) -> Asset:
     return Asset(
-        serial=entity.serial_number.lower if entity.serial_number is not None else None,
+        serial=entity.serial_number.upper()
+        if entity.serial_number is not None
+        else None,
         tags=["navsync"],
         manufacturer=navbox.type_vendor.lower()
         if navbox.type_vendor is not None
         else None,
-        model=navbox.type_name.lower() if navbox.type_name is not None else None,
+        model=navbox.type_name.upper() if navbox.type_name is not None else None,
         owner=owner_id,
         tenant=navbox.organization_identifier,
     )
