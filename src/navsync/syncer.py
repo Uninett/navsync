@@ -7,6 +7,7 @@ from typing import Iterable, Optional, Sequence, Union
 import jwt
 import pynetbox.core.api as netbox
 from dynaconf import Dynaconf
+from pynetbox.core.query import RequestError
 from pynetbox.core.response import Record
 
 from navsync import config
@@ -137,7 +138,7 @@ class Syncer:
         Syncs all navboxes from all NAV server instances found on the Netbox
         server to Netbox
         """
-        _, devices = self._get_virtual_chassises_and_devices()
+        chassis, devices = self._get_virtual_chassis_and_devices()
         locations = get_locations_from_devices(devices.values())
         sites = get_sites_from_locations(locations)
         assets = {device.name: device.asset for device in devices.values()}
@@ -152,6 +153,8 @@ class Syncer:
         self._sync_locations(locations)
         self._sync_devices(devices.values())
         self._sync_assets(assets)
+
+        self._sync_virtual_chassis(chassis.values())
 
     @classmethod
     def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
@@ -176,6 +179,44 @@ class Syncer:
             issuer=nav_iss_claim,
             https=https,
         )
+
+    def _sync_virtual_chassis(self, chassis: Sequence[VirtualChassis]):
+        upstream_chassis = self._get_upstream_chassis()
+        upstream_devices = self._get_upstream_devices()
+        for virtual_chassis in chassis:
+            upstream_virtual_chassis = upstream_chassis.get(virtual_chassis.name)
+            if upstream_virtual_chassis:
+                self._register_devices_as_members_of_vc(
+                    virtual_chassis.devices, upstream_devices, upstream_virtual_chassis
+                )
+                if (
+                    not upstream_virtual_chassis.description
+                    and virtual_chassis.description
+                ):
+                    upstream_virtual_chassis.description = virtual_chassis.description
+                if not upstream_virtual_chassis.comments and virtual_chassis.comments:
+                    upstream_virtual_chassis.comments = virtual_chassis.comments
+                if upstream_virtual_chassis.updates():
+                    _logger.debug(
+                        f"Updating virtual chassis {upstream_virtual_chassis.name}"
+                    )
+                    upstream_virtual_chassis.save()
+            else:
+                new_virtual_chassis = {
+                    "name": virtual_chassis.name,
+                    "tenant": virtual_chassis.tenant,
+                }
+                if virtual_chassis.description:
+                    new_virtual_chassis["description"] = virtual_chassis.description
+                if virtual_chassis.comments:
+                    new_virtual_chassis["comments"] = virtual_chassis.comments
+                _logger.debug(f"Creating new virtual chassis {virtual_chassis.name}")
+                created_virtual_chassis = self.netbox_api.dcim.virtual_chassis.create(
+                    **new_virtual_chassis
+                )
+                self._register_devices_as_members_of_vc(
+                    virtual_chassis.devices, upstream_devices, created_virtual_chassis
+                )
 
     def _sync_assets(self, assets: dict[NameStr, Asset]):
         upstream_devices_by_name = self._get_upstream_devices()
@@ -397,6 +438,13 @@ class Syncer:
                     existing_tags[created_tag.name] = created_tag.id
         return existing_tags
 
+    def _get_upstream_chassis(self) -> dict[NameStr, Record]:
+        """Returns dict mapping name to virtual chassis"""
+        return {
+            chassis.name: chassis
+            for chassis in self.netbox_api.dcim.virtual_chassis.all()
+        }
+
     def _get_upstream_assets(self) -> dict[SerialStr, Record]:
         """Returns dict mapping serial number to asset"""
         return {
@@ -449,7 +497,28 @@ class Syncer:
             ):
                 return upstream_site
 
-    def _get_virtual_chassises_and_devices(
+    def _register_devices_as_members_of_vc(
+        self,
+        devices: Sequence[Device],
+        upstream_devices: Sequence[Record],
+        virtual_chassis: Record,
+    ):
+        for device in devices:
+            if upstream_device := upstream_devices.get(device.name):
+                upstream_device.virtual_chassis = virtual_chassis.id
+                upstream_device.vc_position = device.vc_position
+                if upstream_device.updates():
+                    try:
+                        upstream_device.save()
+                        _logger.debug(
+                            f"Registering device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}"
+                        )
+                    except RequestError as e:
+                        _logger.error(
+                            f"Could not register device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}: {str(e)}"
+                        )
+
+    def _get_virtual_chassis_and_devices(
         self,
     ) -> tuple[dict[NameStr, VirtualChassis], dict[NameStr, Device]]:
         entities = []

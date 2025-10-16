@@ -94,7 +94,7 @@ class VirtualChassis:
 
     name: str
     tags: list[str]
-    tenant: int | str
+    tenant: int
     devices: list[Device]
     description: str | None = None
     comments: str | None = None
@@ -430,6 +430,7 @@ def _parse_device(
         asset=_parse_asset(navbox, physical_chassis, owner_id),
         location=_parse_location(navbox, owner_id),
         role=_get_device_role_from_navbox(navbox),
+        vc_position=vc_position,
     )
 
 
