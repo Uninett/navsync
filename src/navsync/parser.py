@@ -399,7 +399,7 @@ def _parse_virtual_chassis(
 
     return VirtualChassis(
         name=navbox.sysname,
-        tags=[],
+        tags=["navsync"],
         tenant=owner_id,
         devices=devices,
         description=virtual_chassis.description,
@@ -419,7 +419,7 @@ def _parse_device(
 
     return Device(
         name=sysname,
-        tags=[],
+        tags=["navsync"],
         tenant=navbox.organization_identifier,
         manufacturer=navbox.type_vendor.lower()
         if navbox.type_vendor is not None
@@ -433,7 +433,7 @@ def _parse_device(
 def _parse_asset(navbox: NavBox, entity: NavBoxEntity, owner_id: int) -> Asset:
     return Asset(
         serial=entity.serial_number.lower if entity.serial_number is not None else None,
-        tags=[],
+        tags=["navsync"],
         manufacturer=navbox.type_vendor.lower()
         if navbox.type_vendor is not None
         else None,
@@ -447,7 +447,7 @@ def _parse_location(navbox: NavBox, owner_id: int) -> Location:
     site = _parse_site(navbox, owner_id)
     return Location(
         name=navbox.room_name,
-        tags=[],
+        tags=["navsync"],
         tenant=owner_id,
         description=navbox.room_description,
         site=site,
@@ -479,7 +479,7 @@ def _parse_site(navbox: NavBox, owner_id: int) -> Site:
         slug = "-".join(name.split()).lower()
         return Site(
             name=name,
-            tags=[],
+            tags=["navsync"],
             physical_address=address,
             slug=slug,
             latitude=latitude,
@@ -491,7 +491,7 @@ def _parse_site(navbox: NavBox, owner_id: int) -> Site:
     slug = "-".join(name.split()).lower().replace(".", "-")
     return Site(
         name=name,
-        tags=[],
+        tags=["navsync"],
         slug=slug,
         latitude=latitude,
         longitude=longitude,
