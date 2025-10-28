@@ -2,7 +2,7 @@ import argparse
 import logging
 import time
 from datetime import datetime, timedelta, timezone
-from typing import Iterable, Optional, Sequence
+from typing import Iterable, Optional, Sequence, Union
 
 import jwt
 import pynetbox.core.api as netbox
@@ -11,6 +11,7 @@ from pynetbox.core.response import Record
 
 from navsync import config
 from navsync.parser import (
+    Asset,
     Device,
     Location,
     NameStr,
@@ -139,6 +140,8 @@ class Syncer:
         locations = get_locations_from_devices(devices.values())
         sites = get_sites_from_locations(locations)
 
+        self.tags = self._get_or_create_tags(sites + locations + list(devices.values()))
+
         self._sync_sites(sites)
         self._sync_locations(locations)
 
@@ -175,11 +178,16 @@ class Syncer:
 
         for location in locations:
             upstream_location = upstream_locations_by_name.get(location.name)
+            tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
             if upstream_location:
                 if not upstream_location.description:
                     upstream_location.description = location.description
                 if not upstream_location.tenant:
                     upstream_location.description = location.tenant
+                tag_ids += [
+                    tag.id for tag in upstream_location.tags if tag.id not in tag_ids
+                ]
+                upstream_location.tags = tag_ids
                 if upstream_location.updates():
                     _logger.debug(f"Updating location {upstream_location.name}")
                     upstream_location.save()
@@ -194,6 +202,7 @@ class Syncer:
                     "name": location.name,
                     "slug": location.name.lower(),
                     "status": location.status,
+                    "tags": tag_ids,
                 }
                 if location.description:
                     new_location_dict["description"] = location.description
@@ -207,6 +216,7 @@ class Syncer:
 
         for site in sites:
             upstream_site = self._get_upstream_site(upstream_sites, site)
+            tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
             if upstream_site:
                 if not upstream_site.latitude and not upstream_site.longitude:
                     upstream_site.latitude = f"{site.latitude:.6f}"
@@ -219,6 +229,10 @@ class Syncer:
                     upstream_site.comments = site.comments
                 if not upstream_site.physical_address and site.physical_address:
                     upstream_site.physical_address = site.physical_address
+                tag_ids += [
+                    tag.id for tag in upstream_site.tags if tag.id not in tag_ids
+                ]
+                upstream_site.tags = tag_ids
                 upstream_site.status = site.status
                 if upstream_site.updates():
                     _logger.debug(f"Updating site {upstream_site.name}")
@@ -231,7 +245,7 @@ class Syncer:
                     "status": site.status,
                     "name": site.name,
                     "slug": site.slug,
-                    "tags": site.tags,
+                    "tags": tag_ids,
                 }
                 if site.physical_address:
                     new_site_dict["physical_address"] = site.physical_address
@@ -243,6 +257,29 @@ class Syncer:
                     new_site_dict["region"] = site.region
                 _logger.debug(f"Creating new site {site.name}")
                 self.netbox_api.dcim.sites.create(**new_site_dict)
+
+    def _convert_tag_names_to_ids(
+        self, tag_names: list[NameStr], all_tags: dict[NameStr, int]
+    ) -> list[int]:
+        """Converts a list of tag names to a list of tag IDs using all_tags as the source of IDs
+        Any duplicate tag names will be ignored. Tag names not found in all_tags will be ignored.
+        """
+        tag_ids = set(all_tags[tag] for tag in tag_names if tag in all_tags)
+        return list(tag_ids)
+
+    def _get_or_create_tags(
+        self, objects: list[Union[Site, Location, Device, Asset, VirtualChassis]]
+    ) -> dict[NameStr, int]:
+        """Returns dict mapping tag names to their IDs. Creates any tags that do not already exist."""
+        existing_tags = {tag.name: tag.id for tag in self.netbox_api.extras.tags.all()}
+        for obj in objects:
+            for tag_name in obj.tags:
+                if tag_name not in existing_tags:
+                    created_tag = self.netbox_api.extras.tags.create(
+                        name=tag_name, slug=tag_name
+                    )
+                    existing_tags[created_tag.name] = created_tag.id
+        return existing_tags
 
     def _get_upstream_sites(self) -> list[Record]:
         return list(self.netbox_api.dcim.sites.all())
