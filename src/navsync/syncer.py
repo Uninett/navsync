@@ -16,6 +16,7 @@ from navsync.parser import (
     Location,
     NameStr,
     PhysicalChassis,
+    SerialStr,
     Site,
     VirtualChassis,
     get_locations_from_devices,
@@ -139,12 +140,18 @@ class Syncer:
         _, devices = self._get_virtual_chassises_and_devices()
         locations = get_locations_from_devices(devices.values())
         sites = get_sites_from_locations(locations)
+        assets = {device.name: device.asset for device in devices.values()}
 
-        self.tags = self._get_or_create_tags(sites + locations + list(devices.values()))
+        self.tags = self._get_or_create_tags(
+            sites + locations + list(devices.values()) + list(assets.values())
+        )
+        self.upstream_device_type_by_part_number = self._get_upstream_device_types()
+        self.tenants = self._get_upstream_tenants()
 
         self._sync_sites(sites)
         self._sync_locations(locations)
         self._sync_devices(devices.values())
+        self._sync_assets(assets)
 
     @classmethod
     def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
@@ -170,11 +177,64 @@ class Syncer:
             https=https,
         )
 
+    def _sync_assets(self, assets: dict[NameStr, Asset]):
+        upstream_devices_by_name = self._get_upstream_devices()
+        upstream_assets_by_serial = self._get_upstream_assets()
+
+        for device_name, asset in assets.items():
+            if not asset.serial:
+                continue
+            upstream_asset = upstream_assets_by_serial.get(asset.serial)
+            upstream_device = upstream_devices_by_name.get(device_name)
+            tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
+            if upstream_asset:
+                if not upstream_asset.device and upstream_device:
+                    upstream_asset.device = upstream_device.id
+                    upstream_asset.device_type = upstream_device.device_type.id
+                if not upstream_asset.owner:
+                    upstream_asset.owner = asset.owner
+                if not upstream_asset.tenant and (
+                    upstream_tenant := self.tenants.get(asset.tenant)
+                ):
+                    upstream_asset.tenant = upstream_tenant.id
+                tag_ids += [
+                    tag.id for tag in upstream_asset.tags if tag.id not in tag_ids
+                ]
+                upstream_asset.tags = tag_ids
+                if upstream_asset.updates():
+                    _logger.debug(f"Updating asset {upstream_asset.serial}")
+                    upstream_asset.save()
+            else:
+                new_asset_dict = {
+                    "serial": asset.serial,
+                    "status": asset.status,
+                    "owner": asset.owner,
+                    "tags": tag_ids,
+                }
+                if upstream_device:
+                    new_asset_dict["device"] = upstream_device.id
+                    new_asset_dict["device_type"] = upstream_device.device_type.id
+                else:
+                    upstream_device_type = self.upstream_device_type_by_part_number.get(
+                        asset.model
+                    )
+                    if not upstream_device_type:
+                        _logger.error(
+                            f"Could not find device_type for model {asset.model}. Skipping asset {asset.serial}"
+                        )
+                        continue
+                    else:
+                        new_asset_dict["device_type"] = upstream_device_type.id
+                if upstream_tenant := self.tenants.get(asset.tenant):
+                    new_asset_dict["tenant"] = upstream_tenant.id
+
+                _logger.debug(f"Creating new asset {asset.serial}")
+                self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
+
     def _sync_devices(self, devices: Sequence[Device]):
         upstream_devices_by_name = self._get_upstream_devices()
         upstream_sites = self._get_upstream_sites()
         upstream_locations_by_name = self._get_upstream_locations()
-        upstream_device_type_by_part_number = self._get_upstream_device_types()
         upstream_device_roles_by_name = self._get_upstream_device_roles()
         upstream_tenants_by_name = self._get_upstream_tenants()
 
@@ -201,7 +261,7 @@ class Syncer:
                     raise ValueError(
                         f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
                     )
-                upstream_device_type = upstream_device_type_by_part_number.get(
+                upstream_device_type = self.upstream_device_type_by_part_number.get(
                     device.model
                 )
                 if not upstream_device_type:
@@ -336,6 +396,13 @@ class Syncer:
                     )
                     existing_tags[created_tag.name] = created_tag.id
         return existing_tags
+
+    def _get_upstream_assets(self) -> dict[SerialStr, Record]:
+        """Returns dict mapping serial number to asset"""
+        return {
+            asset.serial: asset
+            for asset in self.netbox_api.plugins.inventory.assets.all()
+        }
 
     def _get_upstream_tenants(self) -> dict[NameStr, Record]:
         """Returns dict mapping name to tenant"""
