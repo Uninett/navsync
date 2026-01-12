@@ -505,6 +505,11 @@ class Syncer:
     ):
         for device in devices:
             if upstream_device := upstream_devices.get(device.name):
+                if device.vc_position is None:
+                    _logger.error(
+                        f"Device {device.name} is missing position, cannot register as member of a virtual chassis"
+                    )
+                    continue
                 upstream_device.virtual_chassis = virtual_chassis.id
                 upstream_device.vc_position = device.vc_position
                 if upstream_device.updates():
