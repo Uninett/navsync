@@ -540,21 +540,24 @@ class Syncer:
             match entity:
                 case VirtualChassis():
                     if entity.name in virtual_chassises:
-                        raise ValueError(
-                            f"Duplicate virtual chassis name {entity.name} found in NAV server {nav_server.url}"
+                        _logger.error(
+                            f"Duplicate virtual chassis name {entity.name} found in NAV server {nav_server.url}. Dropping duplicate."
                         )
+                        continue
                     virtual_chassises[entity.name] = entity
                     for device in entity.devices:
                         if device.name in devices:
-                            raise ValueError(
-                                f"Duplicate device name {device.name} found in NAV server {nav_server.url}"
+                            _logger.error(
+                                f"Duplicate device name {device.name} found in NAV server {nav_server.url}. Dropping duplicate."
                             )
+                            continue
                         devices[device.name] = device
                 case PhysicalChassis():
                     if entity.name in devices:
-                        raise ValueError(
-                            f"Duplicate device name {entity.name} found in NAV server {nav_server.url}"
+                        _logger.error(
+                            f"Duplicate physical chassis name {entity.name} found in NAV server {nav_server.url}. Dropping duplicate."
                         )
+                        continue
                     devices[entity.name] = entity
                 case _:
                     raise TypeError(f"Unexpected entity type {type(entity)}")
