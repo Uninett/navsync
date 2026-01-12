@@ -94,7 +94,7 @@ class VirtualChassis:
 
     name: str
     tags: list[str]
-    tenant: int | str
+    tenant: int
     devices: list[Device]
     description: str | None = None
     comments: str | None = None
@@ -383,19 +383,11 @@ def _parse_virtual_chassis(
             )
 
     devices = []
-    physical_chassises = sorted(
-        physical_chassises,
-        key=lambda x: (
-            1 if x.parent_relpos is None else 0,
-            1 if x.parent_relpos is None else x.parent_relpos,
-        ),
-    )
-    for position, physical_chassis in enumerate(physical_chassises):
+    for physical_chassis in physical_chassises:
         device = _parse_device(
             navbox,
             owner_id,
             physical_chassis,
-            vc_position=position,
         )
         devices.append(device)
 
@@ -412,10 +404,9 @@ def _parse_device(
     navbox: NavBox,
     owner_id: int,
     physical_chassis: NavBoxEntity,
-    vc_position: int | None = None,
 ) -> Device:
-    if vc_position is not None:
-        sysname = f"{navbox.sysname}-{vc_position}"
+    if physical_chassis.parent_relpos is not None:
+        sysname = f"{navbox.sysname}-{physical_chassis.parent_relpos}"
     else:
         sysname = navbox.sysname
 
@@ -430,6 +421,7 @@ def _parse_device(
         asset=_parse_asset(navbox, physical_chassis, owner_id),
         location=_parse_location(navbox, owner_id),
         role=_get_device_role_from_navbox(navbox),
+        vc_position=physical_chassis.parent_relpos,
     )
 
 
