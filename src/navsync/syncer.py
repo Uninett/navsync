@@ -500,7 +500,7 @@ class Syncer:
     def _register_devices_as_members_of_vc(
         self,
         devices: Sequence[Device],
-        upstream_devices: Sequence[Record],
+        upstream_devices: dict[NameStr, Record],
         virtual_chassis: Record,
     ):
         for device in devices:
