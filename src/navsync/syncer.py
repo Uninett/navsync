@@ -510,18 +510,72 @@ class Syncer:
                         f"Device {device.name} is missing position, cannot register as member of a virtual chassis"
                     )
                     continue
-                upstream_device.virtual_chassis = virtual_chassis.id
-                upstream_device.vc_position = device.vc_position
-                if upstream_device.updates():
+                if (
+                    upstream_device.virtual_chassis
+                    and upstream_device.virtual_chassis.id == virtual_chassis.id
+                    and upstream_device.vc_position == device.vc_position
+                ):
+                    # Device is already registered in correct position
+                    continue
+
+                prior_stack_member = self._get_device_for_pos_in_vc(
+                    virtual_chassis.id,
+                    upstream_devices,
+                    device.vc_position,
+                )
+
+                if prior_stack_member:
+                    prior_stack_member.vc_position = None
+                    prior_stack_member.virtual_chassis = None
                     try:
-                        upstream_device.save()
+                        prior_stack_member.save()
+                        # Needs to be done to reset cached values for if fields have been modified
+                        prior_stack_member.full_details()
                         _logger.debug(
-                            f"Registering device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}"
+                            f"Unregistering device {prior_stack_member.name} from virtual chassis {virtual_chassis.name}"
                         )
                     except RequestError as e:
                         _logger.error(
-                            f"Could not register device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}: {str(e)}"
+                            f"Could not unregister device {prior_stack_member.name} from virtual chassis {virtual_chassis.name}: {str(e)}"
                         )
+
+                upstream_device.virtual_chassis = virtual_chassis.id
+                upstream_device.vc_position = device.vc_position
+                try:
+                    upstream_device.save()
+                    # Needs to be done to reset cached values for if fields have been modified
+                    upstream_device.full_details()
+                    _logger.debug(
+                        f"Registering device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}"
+                    )
+                except RequestError as e:
+                    _logger.error(
+                        f"Could not register device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}: {str(e)}"
+                    )
+
+    def _get_device_for_pos_in_vc(
+        self,
+        virtual_chassis_id: int,
+        upstream_devices: dict[NameStr, Record],
+        position: int,
+    ) -> Optional[Record]:
+        """Returns the device in the given position in the given virtual chassis.
+        If no such device exists, returns None.
+        """
+        for device in upstream_devices.values():
+            if device.virtual_chassis:
+                # it will be a Record straight from Netbox, but will be int if its been modified locally
+                if isinstance(device.virtual_chassis, int):
+                    upstream_virtual_chassis_id = device.virtual_chassis
+                else:
+                    upstream_virtual_chassis_id = device.virtual_chassis.id
+
+                if (
+                    upstream_virtual_chassis_id == virtual_chassis_id
+                    and device.vc_position == position
+                ):
+                    return device
+        return None
 
     def _get_virtual_chassis_and_devices(
         self,
