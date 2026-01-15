@@ -56,7 +56,7 @@ class Asset:
     """Information about a Netbox asset instance"""
 
     tags: list[str]
-    tenant: str
+    tenant: int
     owner: int
     status: Literal["stored", "used", "retired"] = "used"
     serial: SerialStr | None = None
@@ -73,7 +73,7 @@ class Device:
 
     name: str
     tags: list[str]
-    tenant: str
+    tenant: int
     asset: Asset
     location: Location
     role: Literal["router", "switch", "unknown", "PDU"]
@@ -259,7 +259,7 @@ def _try_parse_standard_virtual_chassis(
         )
 
     return _parse_virtual_chassis(
-        navbox, navinfo.owner_id, virtual_chassis, physical_chassises
+        navbox, navinfo.tenant_id, virtual_chassis, physical_chassises
     )
 
 
@@ -324,7 +324,7 @@ def _try_parse_juniper_virtual_chassis(
         raise NextAttempt
 
     return _parse_virtual_chassis(
-        navbox, navinfo.owner_id, virtual_chassis, physical_chassises
+        navbox, navinfo.owner_id, navinfo.tenant_id, virtual_chassis, physical_chassises
     )
 
 
@@ -370,6 +370,7 @@ def _parse_unknown_chassis(navbox: NavBox, chassis: NavBoxEntity):
 def _parse_virtual_chassis(
     navbox: NavBox,
     owner_id: int,
+    tenant_id: int,
     virtual_chassis: NavBoxEntity,
     physical_chassises: list[NavBoxEntity],
 ) -> VirtualChassis:
@@ -387,6 +388,7 @@ def _parse_virtual_chassis(
         device = _parse_device(
             navbox,
             owner_id,
+            tenant_id,
             physical_chassis,
         )
         devices.append(device)
@@ -394,7 +396,7 @@ def _parse_virtual_chassis(
     return VirtualChassis(
         name=navbox.sysname,
         tags=["navsync"],
-        tenant=owner_id,
+        tenant=tenant_id,
         devices=devices,
         description=virtual_chassis.description,
     )
@@ -403,6 +405,7 @@ def _parse_virtual_chassis(
 def _parse_device(
     navbox: NavBox,
     owner_id: int,
+    tenant_id: int,
     physical_chassis: NavBoxEntity,
 ) -> Device:
     if physical_chassis.parent_relpos is not None:
@@ -413,13 +416,13 @@ def _parse_device(
     return Device(
         name=sysname,
         tags=["navsync"],
-        tenant=navbox.organization_identifier,
+        tenant=tenant_id,
         manufacturer=navbox.type_vendor.lower()
         if navbox.type_vendor is not None
         else None,
         model=navbox.type_name.upper() if navbox.type_name is not None else None,
-        asset=_parse_asset(navbox, physical_chassis, owner_id),
-        location=_parse_location(navbox, owner_id),
+        asset=_parse_asset(navbox, physical_chassis, owner_id, tenant_id),
+        location=_parse_location(navbox, tenant_id),
         role=_get_device_role_from_navbox(navbox),
         vc_position=physical_chassis.parent_relpos,
     )
@@ -437,7 +440,9 @@ def _get_device_role_from_navbox(navbox: NavBox) -> str:
         return "unknown"
 
 
-def _parse_asset(navbox: NavBox, entity: NavBoxEntity, owner_id: int) -> Asset:
+def _parse_asset(
+    navbox: NavBox, entity: NavBoxEntity, owner_id: int, tenant_id: int
+) -> Asset:
     return Asset(
         serial=entity.serial_number.upper()
         if entity.serial_number is not None
@@ -448,22 +453,22 @@ def _parse_asset(navbox: NavBox, entity: NavBoxEntity, owner_id: int) -> Asset:
         else None,
         model=navbox.type_name.upper() if navbox.type_name is not None else None,
         owner=owner_id,
-        tenant=navbox.organization_identifier,
+        tenant=tenant_id,
     )
 
 
-def _parse_location(navbox: NavBox, owner_id: int) -> Location:
-    site = _parse_site(navbox, owner_id)
+def _parse_location(navbox: NavBox, tenant_id: int) -> Location:
+    site = _parse_site(navbox, tenant_id)
     return Location(
         name=navbox.room_name,
         tags=["navsync"],
-        tenant=owner_id,
+        tenant=tenant_id,
         description=navbox.room_description,
         site=site,
     )
 
 
-def _parse_site(navbox: NavBox, owner_id: int) -> Site:
+def _parse_site(navbox: NavBox, tenant_id: int) -> Site:
     variants = [
         "netbox_site",
         "netbox_address",
@@ -493,7 +498,7 @@ def _parse_site(navbox: NavBox, owner_id: int) -> Site:
             slug=slug,
             latitude=latitude,
             longitude=longitude,
-            tenant=owner_id,
+            tenant=tenant_id,
             description=navbox.room_description,
         )
     name = f"{latitude:.6f}N {longitude:.6f}E"
@@ -504,7 +509,7 @@ def _parse_site(navbox: NavBox, owner_id: int) -> Site:
         slug=slug,
         latitude=latitude,
         longitude=longitude,
-        tenant=owner_id,
+        tenant=tenant_id,
         description=navbox.room_description,
     )
 
