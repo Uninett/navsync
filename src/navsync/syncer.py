@@ -340,7 +340,7 @@ class Syncer:
                 if not upstream_location.description:
                     upstream_location.description = location.description
                 if not upstream_location.tenant:
-                    upstream_location.description = location.tenant
+                    upstream_location.tenant = location.tenant
                 tag_ids += [
                     tag.id for tag in upstream_location.tags if tag.id not in tag_ids
                 ]
