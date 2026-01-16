@@ -245,11 +245,16 @@ class Syncer:
                 continue
             upstream_asset = upstream_assets_by_serial.get(asset.serial)
             upstream_device = upstream_devices_by_name.get(device_name)
+            if upstream_device is None:
+                _logger.error(
+                    f"When syncing asset {asset.serial}, could not find its device "
+                    f"{device_name}. Skipping asset {asset.serial}"
+                )
+                continue
             tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
             if upstream_asset:
-                if upstream_device:
-                    upstream_asset.device = upstream_device.id
-                    upstream_asset.device_type = upstream_device.device_type.id
+                upstream_asset.device = upstream_device.id
+                upstream_asset.device_type = upstream_device.device_type.id
                 upstream_asset.owner = asset.owner
                 upstream_asset.tenant = asset.tenant
                 upstream_asset.status = asset.status
@@ -271,21 +276,9 @@ class Syncer:
                     "owner": asset.owner,
                     "tags": tag_ids,
                     "tenant": asset.tenant,
+                    "device": upstream_device.id,
+                    "device_type": upstream_device.device_type.id,
                 }
-                if upstream_device:
-                    new_asset_dict["device"] = upstream_device.id
-                    new_asset_dict["device_type"] = upstream_device.device_type.id
-                else:
-                    upstream_device_type = self.upstream_device_type_by_part_number.get(
-                        asset.model
-                    )
-                    if not upstream_device_type:
-                        _logger.error(
-                            f"Could not find device_type for model {asset.model}. Skipping asset {asset.serial}"
-                        )
-                        continue
-                    else:
-                        new_asset_dict["device_type"] = upstream_device_type.id
 
                 _logger.debug(f"Creating new asset {asset.serial}")
                 self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
