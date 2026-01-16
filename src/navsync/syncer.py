@@ -151,7 +151,7 @@ class Syncer:
 
         self._sync_sites(sites)
         self._sync_locations(locations)
-        self._sync_devices(devices.values())
+        self._sync_devices(devices)
         self._sync_assets(assets)
 
         self._sync_virtual_chassis(chassis.values())
@@ -221,6 +221,22 @@ class Syncer:
     def _sync_assets(self, assets: dict[NameStr, Asset]):
         upstream_devices_by_name = self._get_upstream_devices()
         upstream_assets_by_serial = self._get_upstream_assets()
+        assets_by_serial = {
+            asset.serial: asset for asset in assets.values() if asset.serial is not None
+        }
+
+        # Shelve any upstream assets that were registered by navsync
+        # but was not found in the current sync
+        for upstream_serial, upstream_asset in upstream_assets_by_serial.items():
+            if "navsync" not in [tag.name for tag in upstream_asset.tags]:
+                continue
+            if upstream_asset.status != "used":
+                continue
+            if upstream_serial not in assets_by_serial:
+                _logger.debug(f"Shelving asset {upstream_serial}")
+                upstream_asset.status = "stored"
+                upstream_asset.device = None
+                upstream_asset.save()
 
         for device_name, asset in assets.items():
             if not asset.serial:
@@ -232,6 +248,7 @@ class Syncer:
                 if not upstream_asset.device and upstream_device:
                     upstream_asset.device = upstream_device.id
                     upstream_asset.device_type = upstream_device.device_type.id
+                    upstream_asset.status = "used"
                 if not upstream_asset.owner:
                     upstream_asset.owner = asset.owner
                 if not upstream_asset.tenant and (
@@ -272,14 +289,30 @@ class Syncer:
                 _logger.debug(f"Creating new asset {asset.serial}")
                 self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
 
-    def _sync_devices(self, devices: Sequence[Device]):
+    def _sync_devices(self, devices: dict[NameStr, Device]):
         upstream_devices_by_name = self._get_upstream_devices()
         upstream_sites = self._get_upstream_sites()
         upstream_locations_by_name = self._get_upstream_locations()
         upstream_device_roles_by_name = self._get_upstream_device_roles()
         upstream_tenants_by_name = self._get_upstream_tenants()
 
-        for device in devices:
+        # Shelve any upstream devices that were registered by navsync
+        # but was not found in the current sync
+        for upstream_device in upstream_devices_by_name.values():
+            if "navsync" not in [tag.name for tag in upstream_device.tags]:
+                continue
+            if upstream_device.status.value != "active":
+                continue
+            if upstream_device.name not in devices:
+                _logger.debug(f"Decommissioning device {upstream_device.name}")
+                upstream_device.status = "inventory"
+                upstream_device.location = None
+                upstream_device.tenant = None
+                upstream_device.virtual_chassis = None
+                upstream_device.vc_position = None
+                upstream_device.save()
+
+        for device in devices.values():
             upstream_device = upstream_devices_by_name.get(device.name)
             tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
             if upstream_device:
@@ -291,6 +324,7 @@ class Syncer:
                     tag.id for tag in upstream_device.tags if tag.id not in tag_ids
                 ]
                 upstream_device.tags = tag_ids
+                upstream_device.status = "active"
                 if upstream_device.updates():
                     _logger.debug(f"Updating device {upstream_device.name}")
                     upstream_device.save()
