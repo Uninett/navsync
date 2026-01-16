@@ -251,10 +251,8 @@ class Syncer:
                     upstream_asset.status = "used"
                 if not upstream_asset.owner:
                     upstream_asset.owner = asset.owner
-                if not upstream_asset.tenant and (
-                    upstream_tenant := self.tenants.get(asset.tenant)
-                ):
-                    upstream_asset.tenant = upstream_tenant.id
+                if not upstream_asset.tenant:
+                    upstream_asset.tenant = asset.tenant
                 tag_ids += [
                     tag.id for tag in upstream_asset.tags if tag.id not in tag_ids
                 ]
@@ -268,6 +266,7 @@ class Syncer:
                     "status": asset.status,
                     "owner": asset.owner,
                     "tags": tag_ids,
+                    "tenant": asset.tenant,
                 }
                 if upstream_device:
                     new_asset_dict["device"] = upstream_device.id
@@ -283,8 +282,6 @@ class Syncer:
                         continue
                     else:
                         new_asset_dict["device_type"] = upstream_device_type.id
-                if upstream_tenant := self.tenants.get(asset.tenant):
-                    new_asset_dict["tenant"] = upstream_tenant.id
 
                 _logger.debug(f"Creating new asset {asset.serial}")
                 self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
@@ -294,7 +291,6 @@ class Syncer:
         upstream_sites = self._get_upstream_sites()
         upstream_locations_by_name = self._get_upstream_locations()
         upstream_device_roles_by_name = self._get_upstream_device_roles()
-        upstream_tenants_by_name = self._get_upstream_tenants()
 
         # Shelve any upstream devices that were registered by navsync
         # but was not found in the current sync
@@ -316,10 +312,8 @@ class Syncer:
             upstream_device = upstream_devices_by_name.get(device.name)
             tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
             if upstream_device:
-                if not upstream_device.tenant and (
-                    upstream_tenant := upstream_tenants_by_name.get(device.tenant)
-                ):
-                    upstream_device.tenant = upstream_tenant.id
+                if not upstream_device.tenant:
+                    upstream_device.tenant = device.tenant
                 tag_ids += [
                     tag.id for tag in upstream_device.tags if tag.id not in tag_ids
                 ]
@@ -353,13 +347,13 @@ class Syncer:
                     "role": upstream_device_role.id,
                     "site": upstream_site.id,
                     "tags": tag_ids,
+                    "tenant": device.tenant,
                 }
                 if upstream_location := upstream_locations_by_name.get(
                     device.location.name
                 ):
                     new_device_dict["location"] = upstream_location.id
-                if upstream_tenant := upstream_tenants_by_name.get(device.tenant):
-                    new_device_dict["tenant"] = upstream_tenant.id
+
                 _logger.debug(f"Creating new device {device.name}")
                 self.netbox_api.dcim.devices.create(**new_device_dict)
 
@@ -374,7 +368,7 @@ class Syncer:
                 if not upstream_location.description:
                     upstream_location.description = location.description
                 if not upstream_location.tenant:
-                    upstream_location.description = location.tenant
+                    upstream_location.tenant = location.tenant
                 tag_ids += [
                     tag.id for tag in upstream_location.tags if tag.id not in tag_ids
                 ]
