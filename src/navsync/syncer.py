@@ -196,6 +196,8 @@ class Syncer:
                     upstream_virtual_chassis.description = virtual_chassis.description
                 if not upstream_virtual_chassis.comments and virtual_chassis.comments:
                     upstream_virtual_chassis.comments = virtual_chassis.comments
+                if virtual_chassis.tenant:
+                    upstream_virtual_chassis.tenant = virtual_chassis.tenant
                 if upstream_virtual_chassis.updates():
                     _logger.debug(
                         f"Updating virtual chassis {upstream_virtual_chassis.name}"
@@ -245,14 +247,16 @@ class Syncer:
             upstream_device = upstream_devices_by_name.get(device_name)
             tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
             if upstream_asset:
-                if not upstream_asset.device and upstream_device:
+                if upstream_device:
                     upstream_asset.device = upstream_device.id
                     upstream_asset.device_type = upstream_device.device_type.id
-                    upstream_asset.status = "used"
-                if not upstream_asset.owner:
-                    upstream_asset.owner = asset.owner
-                if not upstream_asset.tenant:
-                    upstream_asset.tenant = asset.tenant
+                upstream_asset.owner = asset.owner
+                upstream_asset.tenant = asset.tenant
+                upstream_asset.status = asset.status
+                if not upstream_asset.comments and asset.comments:
+                    upstream_asset.comments = asset.comments
+                if asset.contact is not None:
+                    upstream_asset.contact = asset.contact
                 tag_ids += [
                     tag.id for tag in upstream_asset.tags if tag.id not in tag_ids
                 ]
@@ -312,13 +316,40 @@ class Syncer:
             upstream_device = upstream_devices_by_name.get(device.name)
             tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
             if upstream_device:
-                if not upstream_device.tenant:
-                    upstream_device.tenant = device.tenant
+                upstream_device.tenant = device.tenant
                 tag_ids += [
                     tag.id for tag in upstream_device.tags if tag.id not in tag_ids
                 ]
                 upstream_device.tags = tag_ids
                 upstream_device.status = "active"
+                upstream_site = self._get_upstream_site(
+                    upstream_sites, device.location.site
+                )
+                if not upstream_site:
+                    raise ValueError(
+                        f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
+                    )
+                upstream_device.site = upstream_site.id
+
+                upstream_location = upstream_locations_by_name.get(device.location.name)
+                if upstream_location:
+                    upstream_device.location = upstream_location.id
+
+                upstream_device_role = upstream_device_roles_by_name.get(device.role)
+                if not upstream_device_role:
+                    raise ValueError(f"Could not find device_role {device.role}")
+                upstream_device.role = upstream_device_role.id
+
+                upstream_device_type = self.upstream_device_type_by_part_number.get(
+                    device.model
+                )
+                if not upstream_device_type:
+                    _logger.error(
+                        f"Could not find device_type for model {device.model}. Not updating device_type for device {upstream_device.name}"
+                    )
+                else:
+                    upstream_device.device_type = upstream_device_type.id
+
                 if upstream_device.updates():
                     _logger.debug(f"Updating device {upstream_device.name}")
                     upstream_device.save()
@@ -365,14 +396,20 @@ class Syncer:
             upstream_location = upstream_locations_by_name.get(location.name)
             tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
             if upstream_location:
-                if not upstream_location.description:
+                upstream_location.tenant = location.tenant
+                if not upstream_location.description and location.description:
                     upstream_location.description = location.description
-                if not upstream_location.tenant:
-                    upstream_location.tenant = location.tenant
                 tag_ids += [
                     tag.id for tag in upstream_location.tags if tag.id not in tag_ids
                 ]
                 upstream_location.tags = tag_ids
+                upstream_location.status = location.status
+                upstream_site = self._get_upstream_site(upstream_sites, location.site)
+                if not upstream_site:
+                    raise ValueError(
+                        f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
+                    )
+                upstream_location.site = upstream_site.id
                 if upstream_location.updates():
                     _logger.debug(f"Updating location {upstream_location.name}")
                     upstream_location.save()
@@ -388,11 +425,10 @@ class Syncer:
                     "slug": location.name.lower(),
                     "status": location.status,
                     "tags": tag_ids,
+                    "tenant": location.tenant,
                 }
                 if location.description:
                     new_location_dict["description"] = location.description
-                if location.tenant:
-                    new_location_dict["tenant"] = location.tenant
                 _logger.debug(f"Creating new location {location.name}")
                 self.netbox_api.dcim.locations.create(**new_location_dict)
 
@@ -403,17 +439,23 @@ class Syncer:
             upstream_site = self._get_upstream_site(upstream_sites, site)
             tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
             if upstream_site:
-                if not upstream_site.latitude and not upstream_site.longitude:
+                # upstream_site.updates() always detects changes in lat/long even
+                # if there are none, so we have to set them conditionally
+                if (
+                    upstream_site.latitude - site.latitude > 1e-6
+                    or upstream_site.longitude - site.longitude > 1e-6
+                ):
                     upstream_site.latitude = f"{site.latitude:.6f}"
                     upstream_site.longitude = f"{site.longitude:.6f}"
-                if not upstream_site.tenant:
-                    upstream_site.tenant = site.tenant
+                upstream_site.tenant = site.tenant
                 if not upstream_site.description and site.description:
                     upstream_site.description = site.description
                 if not upstream_site.comments and site.comments:
                     upstream_site.comments = site.comments
-                if not upstream_site.physical_address and site.physical_address:
+                if site.physical_address is not None:
                     upstream_site.physical_address = site.physical_address
+                if site.region is not None:
+                    upstream_site.region = site.region
                 tag_ids += [
                     tag.id for tag in upstream_site.tags if tag.id not in tag_ids
                 ]
