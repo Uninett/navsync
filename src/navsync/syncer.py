@@ -252,6 +252,18 @@ class Syncer:
                 )
                 continue
             tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
+
+            prior_asset = self._get_upstream_asset_for_device(
+                upstream_device.id, upstream_assets_by_serial.values()
+            )
+            if prior_asset and prior_asset.serial != asset.serial:
+                _logger.debug(
+                    f"Asset {prior_asset.serial} is currently assigned to device {upstream_device.name}. Unassigning it in favor of {asset.serial}."
+                )
+                prior_asset.device = None
+                prior_asset.save()
+                prior_asset.full_details()
+
             if upstream_asset:
                 upstream_asset.device = upstream_device.id
                 upstream_asset.device_type = upstream_device.device_type.id
@@ -282,6 +294,21 @@ class Syncer:
 
                 _logger.debug(f"Creating new asset {asset.serial}")
                 self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
+
+    def _get_upstream_asset_for_device(
+        self, device_id: int, upstream_assets: Sequence[Record]
+    ) -> Optional[Record]:
+        for asset in upstream_assets:
+            # Can either be None, an int int or a Record object
+            if asset.device is None:
+                continue
+            elif isinstance(asset.device, int):
+                asset_device_id = asset.device
+            else:
+                asset_device_id = asset.device.id
+            if asset_device_id == device_id:
+                return asset
+        return None
 
     def _sync_devices(self, devices: dict[NameStr, Device]):
         upstream_devices_by_name = self._get_upstream_devices()
