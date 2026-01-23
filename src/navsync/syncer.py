@@ -764,7 +764,7 @@ class Syncer:
             yield NavServerInfo(
                 url=self._get_url_from_name(device.name),
                 owner_id=asset.owner.id,
-                tenant_id=asset.tenant.id,
+                tenant_id=device.tenant.id,
             )
 
     def _get_url_from_name(self, device_name: str) -> str:
