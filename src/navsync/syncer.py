@@ -761,6 +761,9 @@ class Syncer:
             if not hasattr(device, "tenant") or device.tenant is None:
                 self.log_netbox_insufficiency(None, device, "tenant", "Missing tenant")
                 continue
+            if not hasattr(asset, "owner") or asset.owner is None:
+                self.log_netbox_insufficiency(None, asset, "owner", "Missing owner")
+                continue
             yield NavServerInfo(
                 url=self._get_url_from_name(device.name),
                 owner_id=asset.owner.id,
