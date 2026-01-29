@@ -746,7 +746,7 @@ class Syncer:
                 )
                 continue
             yield NavServerInfo(
-                url=self.get_url_from_name(vm.name),
+                url=self._get_url_from_name(vm.name),
                 owner_id=vm.custom_fields["owner"].id,
                 tenant_id=vm.tenant.id,
             )
