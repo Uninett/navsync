@@ -736,13 +736,13 @@ class Syncer:
 
         for vm in virtual_machines:
             if "owner" not in vm.custom_fields:
-                self.log_netbox_insufficiency(
-                    None, vm, "custom_fields", "Missing 'owner'"
+                _logger.error(
+                    f"VM {vm.name} is missing custom field 'owner'. Cannot determine NAV server owner. Skipping."
                 )
                 continue
             if not hasattr(vm.custom_fields["owner"], "id"):
-                self.log_netbox_insufficiency(
-                    None, vm, "custom_fields", "'owner' should be a Tenant with an 'id'"
+                _logger.error(
+                    f"VM {vm.name} has an 'owner' custom field that is not a Tenant with an 'id'. Cannot determine NAV server owner. Skipping."
                 )
                 continue
             yield NavServerInfo(
@@ -754,15 +754,19 @@ class Syncer:
         for device in devices:
             asset = self.netbox_api.plugins.inventory.assets.get(device=device)
             if not asset:
-                self.log_netbox_insufficiency(
-                    None, device, None, "No asset assigned to device"
+                _logger.error(
+                    f"Device {device.name} has no asset assigned. Cannot determine NAV server owner. Skipping."
                 )
                 continue
             if not hasattr(device, "tenant") or device.tenant is None:
-                self.log_netbox_insufficiency(None, device, "tenant", "Missing tenant")
+                _logger.error(
+                    f"Device {device.name} has no tenant assigned. Cannot determine NAV server tenant. Skipping."
+                )
                 continue
             if not hasattr(asset, "owner") or asset.owner is None:
-                self.log_netbox_insufficiency(None, asset, "owner", "Missing owner")
+                _logger.error(
+                    f"Device {device.name}'s asset has no owner assigned. Cannot determine NAV server owner. Skipping."
+                )
                 continue
             yield NavServerInfo(
                 url=self._get_url_from_name(device.name),
