@@ -293,7 +293,15 @@ class Syncer:
                 }
 
                 _logger.debug(f"Creating new asset {asset.serial}")
-                self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
+                _logger.debug(f"New asset data: {new_asset_dict}")
+                # There is a problem where netbox sometimes returns a 500 error
+                # when you create an asset even though the asset is created successfully.
+                try:
+                    self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
+                except RequestError as e:
+                    _logger.error(
+                        f"Got error while creating asset {asset.serial}: {str(e)}"
+                    )
 
     def _get_upstream_asset_for_device(
         self, device_id: int, upstream_assets: Sequence[Record]
@@ -736,17 +744,17 @@ class Syncer:
 
         for vm in virtual_machines:
             if "owner" not in vm.custom_fields:
-                self.log_netbox_insufficiency(
-                    None, vm, "custom_fields", "Missing 'owner'"
+                _logger.error(
+                    f"VM {vm.name} is missing custom field 'owner'. Cannot determine NAV server owner. Skipping."
                 )
                 continue
             if not hasattr(vm.custom_fields["owner"], "id"):
-                self.log_netbox_insufficiency(
-                    None, vm, "custom_fields", "'owner' should be a Tenant with an 'id'"
+                _logger.error(
+                    f"VM {vm.name} has an 'owner' custom field that is not a Tenant with an 'id'. Cannot determine NAV server owner. Skipping."
                 )
                 continue
             yield NavServerInfo(
-                url=self.get_url_from_name(vm.name),
+                url=self._get_url_from_name(vm.name),
                 owner_id=vm.custom_fields["owner"].id,
                 tenant_id=vm.tenant.id,
             )
@@ -754,12 +762,19 @@ class Syncer:
         for device in devices:
             asset = self.netbox_api.plugins.inventory.assets.get(device=device)
             if not asset:
-                self.log_netbox_insufficiency(
-                    None, device, None, "No asset assigned to device"
+                _logger.error(
+                    f"Device {device.name} has no asset assigned. Cannot determine NAV server owner. Skipping."
                 )
                 continue
-            if not hasattr(asset, "tenant") or asset.tenant is None:
-                self.log_netbox_insufficiency(None, asset, "tenant", "Missing tenant")
+            if not hasattr(device, "tenant") or device.tenant is None:
+                _logger.error(
+                    f"Device {device.name} has no tenant assigned. Cannot determine NAV server tenant. Skipping."
+                )
+                continue
+            if not hasattr(asset, "owner") or asset.owner is None:
+                _logger.error(
+                    f"Device {device.name}'s asset has no owner assigned. Cannot determine NAV server owner. Skipping."
+                )
                 continue
             yield NavServerInfo(
                 url=self._get_url_from_name(device.name),

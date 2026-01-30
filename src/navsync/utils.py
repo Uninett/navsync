@@ -20,11 +20,15 @@ class NavServerInfo:
 
 def url_with_https(url: str):
     if not url.lower().startswith("https://"):
-        return "https://" + url
+        url = "https://" + url
+    if not url.endswith("/"):
+        url += "/"
     return url
 
 
 def url_with_http(url: str):
     if not url.lower().startswith("http://"):
-        return "http://" + url
+        url = "http://" + url
+    if not url.endswith("/"):
+        url += "/"
     return url
