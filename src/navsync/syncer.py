@@ -293,7 +293,15 @@ class Syncer:
                 }
 
                 _logger.debug(f"Creating new asset {asset.serial}")
-                self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
+                _logger.debug(f"New asset data: {new_asset_dict}")
+                # There is a problem where netbox sometimes returns a 500 error
+                # when you create an asset even though the asset is created successfully.
+                try:
+                    self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
+                except RequestError as e:
+                    _logger.error(
+                        f"Got error while creating asset {asset.serial}: {str(e)}"
+                    )
 
     def _get_upstream_asset_for_device(
         self, device_id: int, upstream_assets: Sequence[Record]
