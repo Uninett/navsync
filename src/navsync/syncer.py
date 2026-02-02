@@ -281,8 +281,11 @@ class Syncer:
                     upstream_asset.comments = asset.comments
                 if asset.contact is not None:
                     upstream_asset.contact = asset.contact
+                upstream_asset_tag_ids = self._get_tag_ids_from_tags(
+                    upstream_asset.tags
+                )
                 tag_ids += [
-                    tag.id for tag in upstream_asset.tags if tag.id not in tag_ids
+                    tag_id for tag_id in upstream_asset_tag_ids if tag_id not in tag_ids
                 ]
                 upstream_asset.tags = tag_ids
                 if upstream_asset.updates():
@@ -358,9 +361,16 @@ class Syncer:
             tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
             if upstream_device:
                 upstream_device.tenant = device.tenant
+
+                upstream_device_tag_ids = self._get_tag_ids_from_tags(
+                    upstream_device.tags
+                )
                 tag_ids += [
-                    tag.id for tag in upstream_device.tags if tag.id not in tag_ids
+                    tag_id
+                    for tag_id in upstream_device_tag_ids
+                    if tag_id not in tag_ids
                 ]
+
                 upstream_device.tags = tag_ids
                 upstream_device.status = "active"
                 upstream_site = self._get_upstream_site(
@@ -440,9 +450,16 @@ class Syncer:
                 upstream_location.tenant = location.tenant
                 if not upstream_location.description and location.description:
                     upstream_location.description = location.description
+
+                upstream_location_tag_ids = self._get_tag_ids_from_tags(
+                    upstream_location.tags
+                )
                 tag_ids += [
-                    tag.id for tag in upstream_location.tags if tag.id not in tag_ids
+                    tag_id
+                    for tag_id in upstream_location_tag_ids
+                    if tag_id not in tag_ids
                 ]
+
                 upstream_location.tags = tag_ids
                 upstream_location.status = location.status
                 upstream_site = self._get_upstream_site(upstream_sites, location.site)
@@ -497,9 +514,12 @@ class Syncer:
                     upstream_site.physical_address = site.physical_address
                 if site.region is not None:
                     upstream_site.region = site.region
+
+                upstream_site_tag_ids = self._get_tag_ids_from_tags(upstream_site.tags)
                 tag_ids += [
-                    tag.id for tag in upstream_site.tags if tag.id not in tag_ids
+                    tag_id for tag_id in upstream_site_tag_ids if tag_id not in tag_ids
                 ]
+
                 upstream_site.tags = tag_ids
                 upstream_site.status = site.status
                 if upstream_site.updates():
@@ -815,6 +835,17 @@ class Syncer:
             return url_with_https(device_name)
         else:
             return url_with_http(device_name)
+
+    def _get_tag_ids_from_tags(self, tags: list[Union[int, Record]]) -> list[int]:
+        tag_ids = []
+        for tag in tags:
+            if isinstance(tag, int):
+                tag_id = tag
+            else:
+                tag_id = tag.id
+            if tag_id not in tag_ids:
+                tag_ids.append(tag_id)
+        return tag_ids
 
 
 if __name__ == "__main__":
