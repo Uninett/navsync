@@ -307,7 +307,6 @@ class Syncer:
                 }
 
                 _logger.debug(f"Creating new asset {asset.serial}")
-                _logger.debug(f"New asset data: {new_asset_dict}")
                 # There is a problem where netbox sometimes returns a 500 error
                 # when you create an asset even though the asset is created successfully.
                 try:
