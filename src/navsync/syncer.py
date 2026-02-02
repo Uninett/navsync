@@ -184,6 +184,7 @@ class Syncer:
         upstream_chassis = self._get_upstream_chassis()
         upstream_devices = self._get_upstream_devices()
         for virtual_chassis in chassis:
+            tag_ids = self._convert_tag_names_to_ids(virtual_chassis.tags, self.tags)
             upstream_virtual_chassis = upstream_chassis.get(virtual_chassis.name)
             if upstream_virtual_chassis:
                 self._register_devices_as_members_of_vc(
@@ -198,6 +199,15 @@ class Syncer:
                     upstream_virtual_chassis.comments = virtual_chassis.comments
                 if virtual_chassis.tenant:
                     upstream_virtual_chassis.tenant = virtual_chassis.tenant
+                upstream_virtual_chassis_tag_ids = self._get_tag_ids_from_tags(
+                    upstream_virtual_chassis.tags
+                )
+                tag_ids += [
+                    tag_id
+                    for tag_id in upstream_virtual_chassis_tag_ids
+                    if tag_id not in tag_ids
+                ]
+                upstream_virtual_chassis.tags = tag_ids
                 if upstream_virtual_chassis.updates():
                     _logger.debug(
                         f"Updating virtual chassis {upstream_virtual_chassis.name}"
@@ -207,6 +217,7 @@ class Syncer:
                 new_virtual_chassis = {
                     "name": virtual_chassis.name,
                     "tenant": virtual_chassis.tenant,
+                    "tags": tag_ids,
                 }
                 if virtual_chassis.description:
                     new_virtual_chassis["description"] = virtual_chassis.description
