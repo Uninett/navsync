@@ -238,7 +238,14 @@ class Syncer:
                 _logger.debug(f"Shelving asset {upstream_serial}")
                 upstream_asset.status = "stored"
                 upstream_asset.device = None
-                upstream_asset.save()
+                # There is a problem where netbox sometimes returns a 500 error
+                # when you save an asset even though the asset is saved successfully.
+                try:
+                    upstream_asset.save()
+                except RequestError as e:
+                    _logger.error(
+                        f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
+                    )
 
         for device_name, asset in assets.items():
             if not asset.serial:
@@ -279,8 +286,15 @@ class Syncer:
                 ]
                 upstream_asset.tags = tag_ids
                 if upstream_asset.updates():
+                    # There is a problem where netbox sometimes returns a 500 error
+                    # when you save an asset even though the asset is saved successfully.
                     _logger.debug(f"Updating asset {upstream_asset.serial}")
-                    upstream_asset.save()
+                    try:
+                        upstream_asset.save()
+                    except RequestError as e:
+                        _logger.error(
+                            f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
+                        )
             else:
                 new_asset_dict = {
                     "serial": asset.serial,
@@ -293,7 +307,6 @@ class Syncer:
                 }
 
                 _logger.debug(f"Creating new asset {asset.serial}")
-                _logger.debug(f"New asset data: {new_asset_dict}")
                 # There is a problem where netbox sometimes returns a 500 error
                 # when you create an asset even though the asset is created successfully.
                 try:
