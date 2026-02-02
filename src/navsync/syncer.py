@@ -758,14 +758,14 @@ class Syncer:
                     f"VM {vm.name} is missing custom field 'owner'. Cannot determine NAV server owner. Skipping."
                 )
                 continue
-            if not hasattr(vm.custom_fields["owner"], "id"):
+            if "id" not in vm.custom_fields["owner"]:
                 _logger.error(
-                    f"VM {vm.name} has an 'owner' custom field that is not a Tenant with an 'id'. Cannot determine NAV server owner. Skipping."
+                    f"VM {vm.name} has invalid value for custom field 'owner'. Cannot determine NAV server owner. Skipping."
                 )
                 continue
             yield NavServerInfo(
                 url=self._get_url_from_name(vm.name),
-                owner_id=vm.custom_fields["owner"].id,
+                owner_id=vm.custom_fields["owner"]["id"],
                 tenant_id=vm.tenant.id,
             )
 
