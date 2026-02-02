@@ -259,7 +259,7 @@ def _try_parse_standard_virtual_chassis(
         )
 
     return _parse_virtual_chassis(
-        navbox, navinfo.tenant_id, virtual_chassis, physical_chassises
+        navbox, navinfo.owner_id, navinfo.tenant_id, virtual_chassis, physical_chassises
     )
 
 
