@@ -463,7 +463,7 @@ class Syncer:
                 new_location_dict = {
                     "site": upstream_site.id,
                     "name": location.name,
-                    "slug": location.name.lower(),
+                    "slug": "-".join(location.name.split()).lower(),
                     "status": location.status,
                     "tags": tag_ids,
                     "tenant": location.tenant,
@@ -777,6 +777,7 @@ class Syncer:
                 )
                 continue
             yield NavServerInfo(
+                id=vm.id,
                 url=self._get_url_from_name(vm.name),
                 owner_id=vm.custom_fields["owner"]["id"],
                 tenant_id=vm.tenant.id,
@@ -803,6 +804,7 @@ class Syncer:
                 )
                 continue
             yield NavServerInfo(
+                id=device.id,
                 url=self._get_url_from_name(device.name),
                 owner_id=asset.owner.id,
                 tenant_id=device.tenant.id,

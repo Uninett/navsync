@@ -13,6 +13,7 @@ def init_logging(level: str):
 class NavServerInfo:
     """Information about a NAV server instance"""
 
+    id: int
     url: str
     owner_id: int
     tenant_id: int

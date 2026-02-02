@@ -258,9 +258,7 @@ def _try_parse_standard_virtual_chassis(
             "be wary of missing devices in the parsed Netbox virtual chassis"
         )
 
-    return _parse_virtual_chassis(
-        navbox, navinfo.owner_id, navinfo.tenant_id, virtual_chassis, physical_chassises
-    )
+    return _parse_virtual_chassis(navbox, navinfo, virtual_chassis, physical_chassises)
 
 
 def _try_parse_juniper_virtual_chassis(
@@ -323,9 +321,7 @@ def _try_parse_juniper_virtual_chassis(
         )
         raise NextAttempt
 
-    return _parse_virtual_chassis(
-        navbox, navinfo.owner_id, navinfo.tenant_id, virtual_chassis, physical_chassises
-    )
+    return _parse_virtual_chassis(navbox, navinfo, virtual_chassis, physical_chassises)
 
 
 def _try_parse_standard_virtual_router(navbox: NavBox, navinfo: NavServerInfo):
@@ -369,8 +365,7 @@ def _parse_unknown_chassis(navbox: NavBox, chassis: NavBoxEntity):
 
 def _parse_virtual_chassis(
     navbox: NavBox,
-    owner_id: int,
-    tenant_id: int,
+    navinfo: NavServerInfo,
     virtual_chassis: NavBoxEntity,
     physical_chassises: list[NavBoxEntity],
 ) -> VirtualChassis:
@@ -387,8 +382,7 @@ def _parse_virtual_chassis(
     for physical_chassis in physical_chassises:
         device = _parse_device(
             navbox,
-            owner_id,
-            tenant_id,
+            navinfo,
             physical_chassis,
         )
         devices.append(device)
@@ -396,7 +390,7 @@ def _parse_virtual_chassis(
     return VirtualChassis(
         name=navbox.sysname,
         tags=["navsync"],
-        tenant=tenant_id,
+        tenant=navinfo.tenant_id,
         devices=devices,
         description=virtual_chassis.description,
     )
@@ -404,8 +398,7 @@ def _parse_virtual_chassis(
 
 def _parse_device(
     navbox: NavBox,
-    owner_id: int,
-    tenant_id: int,
+    navinfo: NavServerInfo,
     physical_chassis: NavBoxEntity,
 ) -> Device:
     if physical_chassis.parent_relpos is not None:
@@ -416,13 +409,13 @@ def _parse_device(
     return Device(
         name=sysname,
         tags=["navsync"],
-        tenant=tenant_id,
+        tenant=navinfo.tenant_id,
         manufacturer=navbox.type_vendor.lower()
         if navbox.type_vendor is not None
         else None,
         model=navbox.type_name.upper() if navbox.type_name is not None else None,
-        asset=_parse_asset(navbox, physical_chassis, owner_id, tenant_id),
-        location=_parse_location(navbox, tenant_id),
+        asset=_parse_asset(navbox, physical_chassis, navinfo),
+        location=_parse_location(navbox, navinfo),
         role=_get_device_role_from_navbox(navbox),
         vc_position=physical_chassis.parent_relpos,
     )
@@ -440,9 +433,7 @@ def _get_device_role_from_navbox(navbox: NavBox) -> str:
         return "unknown"
 
 
-def _parse_asset(
-    navbox: NavBox, entity: NavBoxEntity, owner_id: int, tenant_id: int
-) -> Asset:
+def _parse_asset(navbox: NavBox, entity: NavBoxEntity, navinfo: NavServerInfo) -> Asset:
     return Asset(
         serial=entity.serial_number.upper()
         if entity.serial_number is not None
@@ -452,17 +443,17 @@ def _parse_asset(
         if navbox.type_vendor is not None
         else None,
         model=navbox.type_name.upper() if navbox.type_name is not None else None,
-        owner=owner_id,
-        tenant=tenant_id,
+        owner=navinfo.owner_id,
+        tenant=navinfo.tenant_id,
     )
 
 
-def _parse_location(navbox: NavBox, tenant_id: int) -> Location:
-    site = _parse_site(navbox, tenant_id)
+def _parse_location(navbox: NavBox, navinfo: NavServerInfo) -> Location:
+    site = _parse_site(navbox, navinfo.tenant_id)
     return Location(
-        name=navbox.room_name,
+        name=f"Room {navbox.room_name} for VK {navinfo.id}",
         tags=["navsync"],
-        tenant=tenant_id,
+        tenant=navinfo.tenant_id,
         description=navbox.room_description,
         site=site,
     )
