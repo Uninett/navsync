@@ -508,14 +508,20 @@ class Syncer:
             upstream_site = self._get_upstream_site(upstream_sites, site)
             tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
             if upstream_site:
-                # upstream_site.updates() always detects changes in lat/long even
-                # if there are none, so we have to set them conditionally
-                if (
-                    upstream_site.latitude - site.latitude > 1e-6
-                    or upstream_site.longitude - site.longitude > 1e-6
-                ):
-                    upstream_site.latitude = f"{site.latitude:.6f}"
-                    upstream_site.longitude = f"{site.longitude:.6f}"
+                if site.latitude and site.longitude:
+                    if upstream_site.latitude and upstream_site.longitude:
+                        # upstream_site.updates() always detects changes in lat/long even
+                        # if there are none, so we have to set them conditionally
+                        if (
+                            upstream_site.latitude - site.latitude > 1e-6
+                            or upstream_site.longitude - site.longitude > 1e-6
+                        ):
+                            upstream_site.latitude = f"{site.latitude:.6f}"
+                            upstream_site.longitude = f"{site.longitude:.6f}"
+                    else:
+                        upstream_site.latitude = f"{site.latitude:.6f}"
+                        upstream_site.longitude = f"{site.longitude:.6f}"
+
                 upstream_site.tenant = site.tenant
                 if not upstream_site.description and site.description:
                     upstream_site.description = site.description
@@ -538,14 +544,15 @@ class Syncer:
                     upstream_site.save()
             else:
                 new_site_dict = {
-                    "latitude": f"{site.latitude:.6f}",
-                    "longitude": f"{site.longitude:.6f}",
                     "tenant": site.tenant,
                     "status": site.status,
                     "name": site.name,
                     "slug": site.slug,
                     "tags": tag_ids,
                 }
+                if site.latitude and site.longitude:
+                    new_site_dict["latitude"] = f"{site.latitude:.6f}"
+                    new_site_dict["longitude"] = f"{site.longitude:.6f}"
                 if site.physical_address:
                     new_site_dict["physical_address"] = site.physical_address
                 if site.comments:

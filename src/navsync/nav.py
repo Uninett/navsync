@@ -65,8 +65,8 @@ class NavBox:
     type_vendor: Optional[str]
 
     room_name: str
-    room_latitude: float
-    room_longitude: float
+    room_latitude: Optional[float]
+    room_longitude: Optional[float]
     room_description: str
     room_data: dict[str, Optional[str]]
     room_location: Optional[NavLocation]
@@ -183,8 +183,12 @@ class Api:
                 type_vendor=None if json["type"] is None else json["type"]["vendor"],
                 room_name=json["room"]["id"],
                 room_description=json["room"]["description"],
-                room_latitude=float(json["room"]["position"][0]),
-                room_longitude=float(json["room"]["position"][1]),
+                room_latitude=float(json["room"]["position"][0])
+                if json["room"].get("position")
+                else None,
+                room_longitude=float(json["room"]["position"][1])
+                if json["room"].get("position")
+                else None,
                 room_data=json["room"]["data"],
                 organization_identifier=json["organization"]["id"],
                 organization_description=json["organization"]["description"],

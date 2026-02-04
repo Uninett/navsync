@@ -449,7 +449,7 @@ def _parse_asset(navbox: NavBox, entity: NavBoxEntity, navinfo: NavServerInfo) -
 
 
 def _parse_location(navbox: NavBox, navinfo: NavServerInfo) -> Location:
-    site = _parse_site(navbox, navinfo.tenant_id)
+    site = _parse_site(navbox, navinfo)
     return Location(
         name=f"Room {navbox.room_name} for VK {navinfo.id}",
         tags=["navsync"],
@@ -459,7 +459,7 @@ def _parse_location(navbox: NavBox, navinfo: NavServerInfo) -> Location:
     )
 
 
-def _parse_site(navbox: NavBox, tenant_id: int) -> Site:
+def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
     variants = [
         "netbox_site",
         "netbox_address",
@@ -489,20 +489,33 @@ def _parse_site(navbox: NavBox, tenant_id: int) -> Site:
             slug=slug,
             latitude=latitude,
             longitude=longitude,
-            tenant=tenant_id,
+            tenant=navinfo.tenant_id,
             description=navbox.room_description,
         )
-    name = f"{latitude:.6f}N {longitude:.6f}E"
-    slug = "-".join(name.split()).lower().replace(".", "-")
-    return Site(
-        name=name,
-        tags=["navsync"],
-        slug=slug,
-        latitude=latitude,
-        longitude=longitude,
-        tenant=tenant_id,
-        description=navbox.room_description,
-    )
+    elif latitude is not None and longitude is not None:
+        name = f"{latitude:.6f}N {longitude:.6f}E"
+        slug = "-".join(name.split()).lower().replace(".", "-")
+        return Site(
+            name=name,
+            tags=["navsync"],
+            slug=slug,
+            latitude=latitude,
+            longitude=longitude,
+            tenant=navinfo.tenant_id,
+            description=navbox.room_description,
+        )
+    else:
+        name = f"{navbox._room_location_id} for VK {navinfo.id}"
+        slug = "-".join(name.split()).lower().replace(".", "-")
+        return Site(
+            name=name,
+            tags=["navsync"],
+            slug=slug,
+            latitude=latitude,
+            longitude=longitude,
+            tenant=navinfo.tenant_id,
+            description=navbox.room_description,
+        )
 
 
 def _get_first(d: dict, keys: list, ignore_case=False):
