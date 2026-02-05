@@ -474,6 +474,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
     room_data = navbox.room_data
     latitude = navbox.room_latitude
     longitude = navbox.room_longitude
+    description = navbox.room_location.description if navbox.room_location else None
     location_data = {} if navbox.room_location is None else navbox.room_location.data
 
     address = _get_first(room_data, variants, ignore_case=True) or _get_first(
@@ -490,7 +491,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
             latitude=latitude,
             longitude=longitude,
             tenant=navinfo.tenant_id,
-            description=navbox.room_description,
+            description=description,
         )
     elif latitude is not None and longitude is not None:
         name = f"{latitude:.6f}N {longitude:.6f}E"
@@ -502,7 +503,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
             latitude=latitude,
             longitude=longitude,
             tenant=navinfo.tenant_id,
-            description=navbox.room_description,
+            description=description,
         )
     else:
         name = f"{navbox._room_location_id} for VK {navinfo.id}"
@@ -514,7 +515,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
             latitude=latitude,
             longitude=longitude,
             tenant=navinfo.tenant_id,
-            description=navbox.room_description,
+            description=description,
         )
 
 
