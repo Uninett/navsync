@@ -425,7 +425,7 @@ def _parse_device(
         asset=_parse_asset(navbox, physical_chassis, navinfo),
         location=_parse_location(navbox, navinfo),
         role=_get_device_role_from_navbox(navbox),
-        vc_position=physical_chassis.parent_relpos,
+        vc_position=position,
     )
 
 
