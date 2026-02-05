@@ -1,7 +1,7 @@
 import logging
 from dataclasses import dataclass
 from enum import IntEnum
-from typing import Callable, Literal, NewType, Self, Sequence
+from typing import Callable, Literal, NewType, Optional, Self, Sequence
 
 from navsync.nav import Api, NavBox, NavBoxEntity
 from navsync.utils import NavServerInfo
@@ -380,10 +380,17 @@ def _parse_virtual_chassis(
 
     devices = []
     for physical_chassis in physical_chassises:
+        if physical_chassis.parent_relpos is None:
+            _logger.warning(
+                f"Failed attempt to parse {navbox.sysname} as virtual chassis: Some devices "
+                "do not have an explicit position inside the virtual chassis"
+            )
+            raise NextAttempt
         device = _parse_device(
             navbox,
             navinfo,
             physical_chassis,
+            position=physical_chassis.parent_relpos,
         )
         devices.append(device)
 
@@ -400,9 +407,10 @@ def _parse_device(
     navbox: NavBox,
     navinfo: NavServerInfo,
     physical_chassis: NavBoxEntity,
+    position: Optional[int] = None,
 ) -> Device:
-    if physical_chassis.parent_relpos is not None:
-        sysname = f"{navbox.sysname}-{physical_chassis.parent_relpos}"
+    if position is not None:
+        sysname = f"{navbox.sysname}-{position}"
     else:
         sysname = navbox.sysname
 
