@@ -503,66 +503,70 @@ class Syncer:
 
     def _sync_sites(self, sites: Sequence[Site]):
         upstream_sites = self._get_upstream_sites()
-
         for site in sites:
             upstream_site = self._get_upstream_site(upstream_sites, site)
-            tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
             if upstream_site:
-                if site.latitude and site.longitude:
-                    if upstream_site.latitude and upstream_site.longitude:
-                        # upstream_site.updates() always detects changes in lat/long even
-                        # if there are none, so we have to set them conditionally
-                        if (
-                            upstream_site.latitude - site.latitude > 1e-6
-                            or upstream_site.longitude - site.longitude > 1e-6
-                        ):
-                            upstream_site.latitude = f"{site.latitude:.6f}"
-                            upstream_site.longitude = f"{site.longitude:.6f}"
-                    else:
-                        upstream_site.latitude = f"{site.latitude:.6f}"
-                        upstream_site.longitude = f"{site.longitude:.6f}"
-
-                upstream_site.tenant = site.tenant
-                if not upstream_site.description and site.description:
-                    upstream_site.description = site.description
-                if not upstream_site.comments and site.comments:
-                    upstream_site.comments = site.comments
-                if site.physical_address is not None:
-                    upstream_site.physical_address = site.physical_address
-                if site.region is not None:
-                    upstream_site.region = site.region
-
-                upstream_site_tag_ids = self._get_tag_ids_from_tags(upstream_site.tags)
-                tag_ids += [
-                    tag_id for tag_id in upstream_site_tag_ids if tag_id not in tag_ids
-                ]
-
-                upstream_site.tags = tag_ids
-                upstream_site.status = site.status
-                if upstream_site.updates():
-                    _logger.debug(f"Updating site {upstream_site.name}")
-                    upstream_site.save()
+                self._update_site(site, upstream_site)
             else:
-                new_site_dict = {
-                    "tenant": site.tenant,
-                    "status": site.status,
-                    "name": site.name,
-                    "slug": site.slug,
-                    "tags": tag_ids,
-                }
-                if site.latitude and site.longitude:
-                    new_site_dict["latitude"] = f"{site.latitude:.6f}"
-                    new_site_dict["longitude"] = f"{site.longitude:.6f}"
-                if site.physical_address:
-                    new_site_dict["physical_address"] = site.physical_address
-                if site.comments:
-                    new_site_dict["comments"] = site.comments
-                if site.description:
-                    new_site_dict["description"] = site.description
-                if site.region:
-                    new_site_dict["region"] = site.region
-                _logger.debug(f"Creating new site {site.name}")
-                self.netbox_api.dcim.sites.create(**new_site_dict)
+                self._create_site(site)
+
+    def _update_site(self, site: Site, upstream_site: Record):
+        if site.latitude and site.longitude:
+            if upstream_site.latitude and upstream_site.longitude:
+                # upstream_site.updates() always detects changes in lat/long even
+                # if there are none, so we have to set them conditionally
+                if (
+                    upstream_site.latitude - site.latitude > 1e-6
+                    or upstream_site.longitude - site.longitude > 1e-6
+                ):
+                    upstream_site.latitude = f"{site.latitude:.6f}"
+                    upstream_site.longitude = f"{site.longitude:.6f}"
+            else:
+                upstream_site.latitude = f"{site.latitude:.6f}"
+                upstream_site.longitude = f"{site.longitude:.6f}"
+
+        upstream_site.tenant = site.tenant
+        if not upstream_site.description and site.description:
+            upstream_site.description = site.description
+        if not upstream_site.comments and site.comments:
+            upstream_site.comments = site.comments
+        if site.physical_address is not None:
+            upstream_site.physical_address = site.physical_address
+        if site.region is not None:
+            upstream_site.region = site.region
+
+        tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
+        upstream_site_tag_ids = self._get_tag_ids_from_tags(upstream_site.tags)
+        tag_ids += [tag_id for tag_id in upstream_site_tag_ids if tag_id not in tag_ids]
+
+        upstream_site.tags = tag_ids
+        upstream_site.status = site.status
+        if upstream_site.updates():
+            _logger.debug(f"Updating site {upstream_site.name}")
+            upstream_site.save()
+
+    def _create_site(self, site: Site):
+        tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
+        new_site_dict = {
+            "tenant": site.tenant,
+            "status": site.status,
+            "name": site.name,
+            "slug": site.slug,
+            "tags": tag_ids,
+        }
+        if site.latitude and site.longitude:
+            new_site_dict["latitude"] = f"{site.latitude:.6f}"
+            new_site_dict["longitude"] = f"{site.longitude:.6f}"
+        if site.physical_address:
+            new_site_dict["physical_address"] = site.physical_address
+        if site.comments:
+            new_site_dict["comments"] = site.comments
+        if site.description:
+            new_site_dict["description"] = site.description
+        if site.region:
+            new_site_dict["region"] = site.region
+        _logger.debug(f"Creating new site {site.name}")
+        self.netbox_api.dcim.sites.create(**new_site_dict)
 
     def _convert_tag_names_to_ids(
         self, tag_names: list[NameStr], all_tags: dict[NameStr, int]
