@@ -369,7 +369,7 @@ def _parse_virtual_chassis(
     virtual_chassis: NavBoxEntity,
     physical_chassises: list[NavBoxEntity],
 ) -> VirtualChassis:
-    if len(physical_chassises):
+    if not physical_chassises:
         _logger.warning(f"Navbox {navbox.sysname} is missing physical chassis entities")
 
     for chassis in physical_chassises:
