@@ -85,9 +85,6 @@ class Device:
     navbox: NavBox | None = None
 
 
-PhysicalChassis = NewType("PhysicalChassis", Device)
-
-
 @dataclass
 class VirtualChassis:
     """Information about a Netbox virtual chassis instance"""
@@ -120,7 +117,7 @@ class IANAPhysicalClass(IntEnum):
 
 def get_netbox_entities(
     nav_server_info: NavServerInfo, token: str
-) -> list[PhysicalChassis | VirtualChassis]:
+) -> list[Device | VirtualChassis]:
     """
     Gets data from all navboxes in a NAV server and parses them into equivalent
     Netbox entities.
@@ -138,7 +135,7 @@ def get_netbox_entities(
     # overshadow these more specific (and more correct) methods.  Thus we
     # define an order the parse methods should be attempted.
     schedule_attempt_order: list[
-        Callable[[NavBox, NavServerInfo], PhysicalChassis | VirtualChassis]
+        Callable[[NavBox, NavServerInfo], Device | VirtualChassis]
     ] = [
         # Depends on nothing
         _try_parse_standard_virtual_chassis,
@@ -154,7 +151,7 @@ def get_netbox_entities(
         _try_parse_physical_chassis,
     ]
 
-    netbox_entities: list[PhysicalChassis | VirtualChassis] = []
+    netbox_entities: list[Device | VirtualChassis] = []
     for navbox in navboxes:
         included_attempts = None
         for schedule_attempt in schedule_attempt_order:

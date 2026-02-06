@@ -16,7 +16,6 @@ from navsync.parser import (
     Device,
     Location,
     NameStr,
-    PhysicalChassis,
     SerialStr,
     Site,
     VirtualChassis,
@@ -759,7 +758,7 @@ class Syncer:
                             )
                             continue
                         devices[device.name] = device
-                case PhysicalChassis():
+                case Device():
                     if entity.name in devices:
                         _logger.error(
                             f"Duplicate physical chassis name {entity.name} found in NAV server {nav_server.url}. Dropping duplicate."
