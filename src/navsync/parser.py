@@ -350,10 +350,31 @@ def _try_parse_unknown(navbox: NavBox, navinfo: NavServerInfo):
     return _parse_unknown_chassis(navbox, chassis)
 
 
-def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo):
+def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Device:
     if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
         raise NextAttempt
-    raise NextAttempt
+    if not navbox.entities:
+        raise NextAttempt
+    physical_chassises = [
+        e for e in navbox.entities if e.physical_class == IANAPhysicalClass.CHASSIS
+    ]
+    if len(physical_chassises) == 0:
+        _logger.warning(
+            f"Failed to find physical chassis for Navbox {navbox.sysname}. Cannot parse as physical chassis."
+        )
+        raise NextAttempt
+    elif len(physical_chassises) > 1:
+        _logger.warning(
+            f"Found multiple physical chassis entities for Navbox {navbox.sysname}. Cannot parse as physical chassis."
+        )
+        raise NextAttempt
+    chassis = physical_chassises[0]
+    device = _parse_device(
+        navbox,
+        navinfo,
+        chassis,
+    )
+    return device
 
 
 def _parse_unknown_chassis(navbox: NavBox, chassis: NavBoxEntity):
