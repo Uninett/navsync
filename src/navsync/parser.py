@@ -183,7 +183,7 @@ def get_netbox_entities(
                 _logger.debug(f"Successfully parsed Navbox {navbox.sysname}")
                 break
         else:
-            _logger.warning(f"Skipped parsing Navbox {navbox.sysname}")
+            _logger.error(f"Could not parse Navbox {navbox.sysname}, skipping")
     return netbox_entities
 
 
