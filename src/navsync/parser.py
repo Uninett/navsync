@@ -451,7 +451,7 @@ def _get_device_role_from_navbox(navbox: NavBox) -> str:
     category = navbox.category
     if category == "GW":
         return "router"
-    elif category == "GWS" or category == "SW":
+    elif category == "GSW" or category == "SW":
         return "switch"
     elif category == "POWER":
         return "PDU"
