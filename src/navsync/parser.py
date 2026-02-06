@@ -85,9 +85,6 @@ class Device:
     navbox: NavBox | None = None
 
 
-PhysicalChassis = NewType("PhysicalChassis", Device)
-
-
 @dataclass
 class VirtualChassis:
     """Information about a Netbox virtual chassis instance"""
@@ -120,7 +117,7 @@ class IANAPhysicalClass(IntEnum):
 
 def get_netbox_entities(
     nav_server_info: NavServerInfo, token: str
-) -> list[PhysicalChassis | VirtualChassis]:
+) -> list[Device | VirtualChassis]:
     """
     Gets data from all navboxes in a NAV server and parses them into equivalent
     Netbox entities.
@@ -138,7 +135,7 @@ def get_netbox_entities(
     # overshadow these more specific (and more correct) methods.  Thus we
     # define an order the parse methods should be attempted.
     schedule_attempt_order: list[
-        Callable[[NavBox, NavServerInfo], PhysicalChassis | VirtualChassis]
+        Callable[[NavBox, NavServerInfo], Device | VirtualChassis]
     ] = [
         # Depends on nothing
         _try_parse_standard_virtual_chassis,
@@ -154,7 +151,7 @@ def get_netbox_entities(
         _try_parse_physical_chassis,
     ]
 
-    netbox_entities: list[PhysicalChassis | VirtualChassis] = []
+    netbox_entities: list[Device | VirtualChassis] = []
     for navbox in navboxes:
         included_attempts = None
         for schedule_attempt in schedule_attempt_order:
@@ -183,7 +180,7 @@ def get_netbox_entities(
                 _logger.debug(f"Successfully parsed Navbox {navbox.sysname}")
                 break
         else:
-            _logger.warning(f"Skipped parsing Navbox {navbox.sysname}")
+            _logger.error(f"Could not parse Navbox {navbox.sysname}, skipping")
     return netbox_entities
 
 
@@ -353,10 +350,31 @@ def _try_parse_unknown(navbox: NavBox, navinfo: NavServerInfo):
     return _parse_unknown_chassis(navbox, chassis)
 
 
-def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo):
+def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Device:
     if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
         raise NextAttempt
-    raise NextAttempt
+    if not navbox.entities:
+        raise NextAttempt
+    physical_chassises = [
+        e for e in navbox.entities if e.physical_class == IANAPhysicalClass.CHASSIS
+    ]
+    if len(physical_chassises) == 0:
+        _logger.warning(
+            f"Failed to find physical chassis for Navbox {navbox.sysname}. Cannot parse as physical chassis."
+        )
+        raise NextAttempt
+    elif len(physical_chassises) > 1:
+        _logger.warning(
+            f"Found multiple physical chassis entities for Navbox {navbox.sysname}. Cannot parse as physical chassis."
+        )
+        raise NextAttempt
+    chassis = physical_chassises[0]
+    device = _parse_device(
+        navbox,
+        navinfo,
+        chassis,
+    )
+    return device
 
 
 def _parse_unknown_chassis(navbox: NavBox, chassis: NavBoxEntity):
