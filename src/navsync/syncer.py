@@ -431,7 +431,7 @@ class Syncer:
                     )
                     continue
                 upstream_device_role = upstream_device_roles_by_name.get(device.role)
-                if not upstream_device_type:
+                if not upstream_device_role:
                     raise ValueError(f"Could not find device_role {device.role}")
                 new_device_dict = {
                     "name": device.name,
