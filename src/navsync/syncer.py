@@ -1,5 +1,6 @@
 import argparse
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence, Union
@@ -146,6 +147,7 @@ class Syncer:
             sites + locations + list(devices.values()) + list(assets.values())
         )
         self.upstream_device_type_by_part_number = self._get_upstream_device_types()
+        self.upstream_manufacturers_by_slug = self._get_upstream_manufacturers()
         self.tenants = self._get_upstream_tenants()
 
         self._sync_sites(sites)
@@ -399,14 +401,15 @@ class Syncer:
             raise ValueError(
                 f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
             )
-        upstream_device_type = self.upstream_device_type_by_part_number.get(
-            device.model
-        )
-        if not upstream_device_type:
+
+        try:
+            upstream_device_type = self.get_or_create_device_type(device)
+        except (RequestError, ValueError) as e:
             _logger.error(
-                f"Could not find device_type for model {device.model}. Skipping device {device.name}"
+                f"Got error while getting or creating device type for model {device.model}: {str(e)}. Skipping device {device.name}"
             )
             return
+
         upstream_device_role = upstream_device_roles_by_name.get(device.role)
         if not upstream_device_role:
             raise ValueError(f"Could not find device_role {device.role}")
@@ -459,12 +462,11 @@ class Syncer:
             raise ValueError(f"Could not find device_role {device.role}")
         upstream_device.role = upstream_device_role.id
 
-        upstream_device_type = self.upstream_device_type_by_part_number.get(
-            device.model
-        )
-        if not upstream_device_type:
+        try:
+            upstream_device_type = self.get_or_create_device_type(device)
+        except (RequestError, ValueError) as e:
             _logger.error(
-                f"Could not find device_type for model {device.model}. Not updating device_type for device {upstream_device.name}"
+                f"Got error while getting or creating device type for model {device.model}: {str(e)}. Not updating device type for device {device.name}."
             )
         else:
             upstream_device.device_type = upstream_device_type.id
@@ -472,6 +474,51 @@ class Syncer:
         if upstream_device.updates():
             _logger.debug(f"Updating device {upstream_device.name}")
             upstream_device.save()
+
+    def _get_upstream_manufacturers(self) -> dict[str, Record]:
+        """Maps slug to manufacturer Record"""
+        upstream_manufacturers = self.netbox_api.dcim.manufacturers.all()
+        return {m.slug: m for m in upstream_manufacturers}
+
+    def get_or_create_device_type(self, device: Device):
+        upstream_device_type = self.upstream_device_type_by_part_number.get(
+            device.model
+        )
+        if not upstream_device_type:
+            if device.model is None or device.manufacturer is None:
+                raise ValueError(
+                    f"Device {device.name} is missing model or manufacturer information. Cannot create device type for it."
+                )
+            upstream_manufacturer = self.get_or_create_manifacturer(device)
+            sanitized_model_name = re.sub("[^0-9a-zA-Z_-]+", "", device.model)
+            device_type_slug = "-".join(
+                f"{upstream_manufacturer.name} {sanitized_model_name}".split()
+            ).lower()
+            upstream_device_type = self.netbox_api.dcim.device_types.create(
+                manufacturer=upstream_manufacturer.id,
+                model=device.model,
+                part_number=device.model,
+                slug=device_type_slug,
+            )
+            self.upstream_device_type_by_part_number[
+                upstream_device_type.part_number
+            ] = upstream_device_type
+        return upstream_device_type
+
+    def get_or_create_manifacturer(self, device) -> Record:
+        manufacturer_slug = "-".join(device.manufacturer.split()).lower()
+        upstream_manufacturer = self.upstream_manufacturers_by_slug.get(
+            manufacturer_slug
+        )
+        if not upstream_manufacturer:
+            upstream_manufacturer = self.netbox_api.dcim.manufacturers.create(
+                name=device.manufacturer,
+                slug=manufacturer_slug,
+            )
+            self.upstream_manufacturers_by_slug[upstream_manufacturer.slug] = (
+                upstream_manufacturer
+            )
+        return upstream_manufacturer
 
     def _sync_locations(self, locations: Sequence[Location]):
         upstream_sites = self._get_upstream_sites()
