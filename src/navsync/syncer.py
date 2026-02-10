@@ -330,22 +330,23 @@ class Syncer:
     ):
         """Shelve any upstream assets that were registered by navsync but were not found in the current sync"""
         for upstream_serial, upstream_asset in upstream_assets_by_serial.items():
+            if upstream_serial in assets_by_serial:
+                continue
             if "navsync" not in [tag.name for tag in upstream_asset.tags]:
                 continue
             if upstream_asset.status != "used":
                 continue
-            if upstream_serial not in assets_by_serial:
-                _logger.debug(f"Shelving asset {upstream_serial}")
-                upstream_asset.status = "stored"
-                upstream_asset.device = None
-                # There is a problem where netbox sometimes returns a 500 error
-                # when you save an asset even though the asset is saved successfully.
-                try:
-                    upstream_asset.save()
-                except RequestError as e:
-                    _logger.error(
-                        f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
-                    )
+            _logger.debug(f"Shelving asset {upstream_serial}")
+            upstream_asset.status = "stored"
+            upstream_asset.device = None
+            # There is a problem where netbox sometimes returns a 500 error
+            # when you save an asset even though the asset is saved successfully.
+            try:
+                upstream_asset.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
+                )
 
     def _get_upstream_asset_for_device(
         self, device_id: int, upstream_assets: Sequence[Record]
@@ -395,18 +396,19 @@ class Syncer:
     ):
         """Shelve any upstream devices that were registered by navsync but were not found in the current sync"""
         for upstream_device in upstream_devices:
+            if upstream_device.name in devices:
+                continue
             if "navsync" not in [tag.name for tag in upstream_device.tags]:
                 continue
             if upstream_device.status.value != "active":
                 continue
-            if upstream_device.name not in devices:
-                _logger.debug(f"Decommissioning device {upstream_device.name}")
-                upstream_device.status = "inventory"
-                upstream_device.location = None
-                upstream_device.tenant = None
-                upstream_device.virtual_chassis = None
-                upstream_device.vc_position = None
-                upstream_device.save()
+            _logger.debug(f"Decommissioning device {upstream_device.name}")
+            upstream_device.status = "inventory"
+            upstream_device.location = None
+            upstream_device.tenant = None
+            upstream_device.virtual_chassis = None
+            upstream_device.vc_position = None
+            upstream_device.save()
 
     def _create_device(
         self,
