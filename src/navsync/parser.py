@@ -477,11 +477,9 @@ def _parse_asset(navbox: NavBox, entity: NavBoxEntity, navinfo: NavServerInfo) -
 
 def _parse_location(navbox: NavBox, navinfo: NavServerInfo) -> Location:
     site = _parse_site(navbox, navinfo)
-    name = f"Room {navbox.room_name} for VK {navinfo.id}"
-    slug = sanitize_slug(name)
     return Location(
-        name=name,
-        slug=slug,
+        name=navbox.room_name,
+        slug=sanitize_slug(navbox.room_name),
         tags=["navsync"],
         tenant=navinfo.tenant_id,
         description=navbox.room_description,
