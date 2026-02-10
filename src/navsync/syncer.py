@@ -424,6 +424,8 @@ class Syncer:
         }
         if upstream_location := upstream_locations_by_name.get(device.location.name):
             new_device_dict["location"] = upstream_location.id
+        if device.description:
+            new_device_dict["description"] = device.description
 
         _logger.debug(f"Creating new device {device.name}")
         self.netbox_api.dcim.devices.create(**new_device_dict)
