@@ -328,7 +328,7 @@ class Syncer:
         upstream_assets_by_serial: dict[str, Record],
         assets_by_serial: dict[str, Asset],
     ):
-        """Shelve any upstream assets that were registered by navsync but was not found in the current sync"""
+        """Shelve any upstream assets that were registered by navsync but were not found in the current sync"""
         for upstream_serial, upstream_asset in upstream_assets_by_serial.items():
             if "navsync" not in [tag.name for tag in upstream_asset.tags]:
                 continue
@@ -368,15 +368,9 @@ class Syncer:
         upstream_locations_by_name = self._get_upstream_locations()
         upstream_device_roles_by_name = self._get_upstream_device_roles()
 
-        # Shelve any upstream devices that were registered by navsync
-        # but was not found in the current sync
-        for upstream_device in upstream_devices_by_name.values():
-            if "navsync" not in [tag.name for tag in upstream_device.tags]:
-                continue
-            if upstream_device.status.value != "active":
-                continue
-            if upstream_device.name not in devices:
-                self._decomission_device(upstream_device)
+        self._decommission_all_missing_devices(
+            devices, upstream_devices_by_name.values()
+        )
 
         for device in devices.values():
             upstream_device = upstream_devices_by_name.get(device.name)
@@ -396,14 +390,23 @@ class Syncer:
                     upstream_device_roles_by_name,
                 )
 
-    def _decomission_device(self, upstream_device: Record):
-        _logger.debug(f"Decommissioning device {upstream_device.name}")
-        upstream_device.status = "inventory"
-        upstream_device.location = None
-        upstream_device.tenant = None
-        upstream_device.virtual_chassis = None
-        upstream_device.vc_position = None
-        upstream_device.save()
+    def _decommission_all_missing_devices(
+        self, devices: dict[NameStr, Device], upstream_devices: Sequence[Record]
+    ):
+        """Shelve any upstream devices that were registered by navsync but were not found in the current sync"""
+        for upstream_device in upstream_devices:
+            if "navsync" not in [tag.name for tag in upstream_device.tags]:
+                continue
+            if upstream_device.status.value != "active":
+                continue
+            if upstream_device.name not in devices:
+                _logger.debug(f"Decommissioning device {upstream_device.name}")
+                upstream_device.status = "inventory"
+                upstream_device.location = None
+                upstream_device.tenant = None
+                upstream_device.virtual_chassis = None
+                upstream_device.vc_position = None
+                upstream_device.save()
 
     def _create_device(
         self,
