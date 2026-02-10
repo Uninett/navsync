@@ -377,7 +377,7 @@ class Syncer:
     def _sync_devices(self, devices: dict[NameStr, Device]):
         upstream_devices_by_name = self._get_upstream_devices()
         upstream_sites = self._get_upstream_sites()
-        upstream_locations_by_name = self._get_upstream_locations()
+        upstream_locations = self._get_upstream_locations()
         upstream_device_roles_by_name = self._get_upstream_device_roles()
 
         self._decommission_all_missing_devices(
@@ -391,14 +391,14 @@ class Syncer:
                     device,
                     upstream_device,
                     upstream_sites,
-                    upstream_locations_by_name,
+                    upstream_locations,
                     upstream_device_roles_by_name,
                 )
             else:
                 self._create_device(
                     device,
                     upstream_sites,
-                    upstream_locations_by_name,
+                    upstream_locations,
                     upstream_device_roles_by_name,
                 )
 
@@ -425,7 +425,7 @@ class Syncer:
         self,
         device: Device,
         upstream_sites: Sequence[Record],
-        upstream_locations_by_name: dict[NameStr, Record],
+        upstream_locations: dict[NameStr, dict[NameStr, Record]],
         upstream_device_roles_by_name: dict[NameStr, Record],
     ):
         upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
@@ -454,7 +454,9 @@ class Syncer:
             "tags": tag_ids,
             "tenant": device.tenant,
         }
-        if upstream_location := upstream_locations_by_name.get(device.location.name):
+        if upstream_location := upstream_locations.get(upstream_site.name, {}).get(
+            device.location.name
+        ):
             new_device_dict["location"] = upstream_location.id
         if device.description:
             new_device_dict["description"] = device.description
@@ -467,7 +469,7 @@ class Syncer:
         device: Device,
         upstream_device: Record,
         upstream_sites: Sequence[Record],
-        upstream_locations_by_name: dict[NameStr, Record],
+        upstream_locations: dict[NameStr, dict[NameStr, Record]],
         upstream_device_roles_by_name: dict[NameStr, Record],
     ):
         tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
@@ -489,7 +491,9 @@ class Syncer:
             )
         upstream_device.site = upstream_site.id
 
-        upstream_location = upstream_locations_by_name.get(device.location.name)
+        upstream_location = upstream_locations.get(upstream_site.name, {}).get(
+            device.location.name
+        )
         if upstream_location:
             upstream_device.location = upstream_location.id
 
@@ -564,7 +568,7 @@ class Syncer:
 
     def _sync_locations(self, locations: Sequence[Location]):
         upstream_sites = self._get_upstream_sites()
-        upstream_locations_by_name = self._get_upstream_locations()
+        upstream_locations = self._get_upstream_locations()
 
         for location in locations:
             upstream_site = self._get_upstream_site(upstream_sites, location.site)
@@ -572,7 +576,9 @@ class Syncer:
                 raise ValueError(
                     f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
                 )
-            upstream_location = upstream_locations_by_name.get(location.name)
+            upstream_location = upstream_locations.get(upstream_site.name, {}).get(
+                location.name
+            )
             if upstream_location:
                 self._update_location(location, upstream_location, upstream_site)
             else:
@@ -745,11 +751,14 @@ class Syncer:
             for device_role in self.netbox_api.dcim.device_roles.all()
         }
 
-    def _get_upstream_locations(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to location"""
-        return {
-            location.name: location for location in self.netbox_api.dcim.locations.all()
-        }
+    def _get_upstream_locations(self) -> dict[NameStr, dict[NameStr, Record]]:
+        """Returns dict of dicts mapping sites and location names to location Records. The first dict maps site name to a dict, and the second dict maps location name to location Record"""
+        locations = {}
+        for location in self.netbox_api.dcim.locations.all():
+            if location.site.name not in locations:
+                locations[location.site.name] = {}
+            locations[location.site.name][location.name] = location
+        return locations
 
     def _get_upstream_devices(self) -> dict[NameStr, Record]:
         """Returns dict mapping name to device"""
