@@ -583,7 +583,7 @@ class Syncer:
         new_location_dict = {
             "site": upstream_site.id,
             "name": location.name,
-            "slug": sanitize_slug(location.name),
+            "slug": location.slug,
             "status": location.status,
             "tags": tag_ids,
             "tenant": location.tenant,
