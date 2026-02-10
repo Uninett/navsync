@@ -320,6 +320,8 @@ class Syncer:
                     "device": upstream_device.id,
                     "device_type": upstream_device.device_type.id,
                 }
+                if asset.comments:
+                    new_asset_dict["comments"] = asset.comments
 
                 _logger.debug(f"Creating new asset {asset.serial}")
                 # There is a problem where netbox sometimes returns a 500 error
@@ -424,6 +426,8 @@ class Syncer:
         }
         if upstream_location := upstream_locations_by_name.get(device.location.name):
             new_device_dict["location"] = upstream_location.id
+        if device.description:
+            new_device_dict["description"] = device.description
 
         _logger.debug(f"Creating new device {device.name}")
         self.netbox_api.dcim.devices.create(**new_device_dict)
@@ -446,6 +450,8 @@ class Syncer:
 
         upstream_device.tags = tag_ids
         upstream_device.status = "active"
+        if not upstream_device.description and device.description:
+            upstream_device.description = device.description
         upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
         if not upstream_site:
             raise ValueError(
