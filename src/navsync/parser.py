@@ -4,7 +4,7 @@ from enum import IntEnum
 from typing import Callable, Literal, NewType, Optional, Self, Sequence
 
 from navsync.nav import Api, NavBox, NavBoxEntity
-from navsync.utils import NavServerInfo
+from navsync.utils import NavServerInfo, sanitize_slug
 
 _logger = logging.getLogger(__name__)
 
@@ -508,7 +508,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
     )
     if address:
         name = address.partition(",")[0]
-        slug = "-".join(name.split()).lower()
+        slug = sanitize_slug(name)
         return Site(
             name=name,
             tags=["navsync"],
@@ -521,7 +521,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
         )
     elif latitude is not None and longitude is not None:
         name = f"{latitude:.6f}N {longitude:.6f}E"
-        slug = "-".join(name.split()).lower().replace(".", "-")
+        slug = sanitize_slug(name)
         return Site(
             name=name,
             tags=["navsync"],
@@ -533,7 +533,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
         )
     else:
         name = f"{navbox._room_location_id} for VK {navinfo.id}"
-        slug = "-".join(name.split()).lower().replace(".", "-")
+        slug = sanitize_slug(name)
         return Site(
             name=name,
             tags=["navsync"],

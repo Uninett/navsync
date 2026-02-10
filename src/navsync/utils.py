@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass
 
 
@@ -33,3 +34,10 @@ def url_with_http(url: str):
     if not url.endswith("/"):
         url += "/"
     return url
+
+
+def sanitize_slug(slug: str) -> str:
+    """Sanitizes a string to be used as a slug by converting to lowercase, replacing spaces and `.` with hyphens and removing any characters that are not alphanumeric, underscores, or hyphens."""
+    slug = slug.replace(" ", "-").lower()
+    slug = slug.replace(".", "-")
+    return re.sub("[^0-9a-zA-Z_-]+", "", slug)
