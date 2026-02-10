@@ -190,13 +190,15 @@ def get_locations_from_devices(
 ) -> list[Location]:
     """Extracts unique locations from a sequence of devices"""
     locations = []
-    name_set = set()
+    site_to_locations = {}
     for device in devices:
         location = device.location
-        # Only include one location per name
-        if location.name not in name_set:
+        if location.site.slug not in site_to_locations:
+            site_to_locations[location.site.slug] = set()
+        # Only include one location per name per site
+        if location.name not in site_to_locations[location.site.slug]:
             locations.append(location)
-            name_set.add(location.name)
+            site_to_locations[location.site.slug].add(location.name)
     return locations
 
 
@@ -477,11 +479,9 @@ def _parse_asset(navbox: NavBox, entity: NavBoxEntity, navinfo: NavServerInfo) -
 
 def _parse_location(navbox: NavBox, navinfo: NavServerInfo) -> Location:
     site = _parse_site(navbox, navinfo)
-    name = f"Room {navbox.room_name} for VK {navinfo.id}"
-    slug = sanitize_slug(name)
     return Location(
-        name=name,
-        slug=slug,
+        name=navbox.room_name,
+        slug=sanitize_slug(navbox.room_name),
         tags=["navsync"],
         tenant=navinfo.tenant_id,
         description=navbox.room_description,
