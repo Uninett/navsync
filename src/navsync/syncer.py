@@ -386,20 +386,34 @@ class Syncer:
 
         for device in devices.values():
             upstream_device = upstream_devices_by_name.get(device.name)
+            upstream_site = self._get_upstream_site(
+                upstream_sites, device.location.site
+            )
+            if not upstream_site:
+                raise ValueError(
+                    f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
+                )
+            upstream_location = upstream_locations.get(upstream_site.name, {}).get(
+                device.location.name
+            )
+            upstream_device_role = upstream_device_roles_by_name.get(device.role)
+            if not upstream_device_role:
+                raise ValueError(f"Could not find device_role {device.role}")
+
             if upstream_device:
                 self._update_device(
                     device,
                     upstream_device,
-                    upstream_sites,
-                    upstream_locations,
-                    upstream_device_roles_by_name,
+                    upstream_site,
+                    upstream_device_role,
+                    upstream_location,
                 )
             else:
                 self._create_device(
                     device,
-                    upstream_sites,
-                    upstream_locations,
-                    upstream_device_roles_by_name,
+                    upstream_site,
+                    upstream_device_role,
+                    upstream_location,
                 )
 
     def _decommission_all_missing_devices(
@@ -424,16 +438,10 @@ class Syncer:
     def _create_device(
         self,
         device: Device,
-        upstream_sites: Sequence[Record],
-        upstream_locations: dict[NameStr, dict[NameStr, Record]],
-        upstream_device_roles_by_name: dict[NameStr, Record],
+        upstream_site: Record,
+        upstream_device_role: Record,
+        upstream_location: Optional[Record] = None,
     ):
-        upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
-        if not upstream_site:
-            raise ValueError(
-                f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
-            )
-
         try:
             upstream_device_type = self.get_or_create_device_type(device)
         except (RequestError, ValueError) as e:
@@ -442,9 +450,6 @@ class Syncer:
             )
             return
 
-        upstream_device_role = upstream_device_roles_by_name.get(device.role)
-        if not upstream_device_role:
-            raise ValueError(f"Could not find device_role {device.role}")
         tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
         new_device_dict = {
             "name": device.name,
@@ -454,9 +459,7 @@ class Syncer:
             "tags": tag_ids,
             "tenant": device.tenant,
         }
-        if upstream_location := upstream_locations.get(upstream_site.name, {}).get(
-            device.location.name
-        ):
+        if upstream_location:
             new_device_dict["location"] = upstream_location.id
         if device.description:
             new_device_dict["description"] = device.description
@@ -468,9 +471,9 @@ class Syncer:
         self,
         device: Device,
         upstream_device: Record,
-        upstream_sites: Sequence[Record],
-        upstream_locations: dict[NameStr, dict[NameStr, Record]],
-        upstream_device_roles_by_name: dict[NameStr, Record],
+        upstream_site: Record,
+        upstream_device_role: Record,
+        upstream_location: Optional[Record] = None,
     ):
         tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
         upstream_device.tenant = device.tenant
@@ -484,22 +487,9 @@ class Syncer:
         upstream_device.status = "active"
         if not upstream_device.description and device.description:
             upstream_device.description = device.description
-        upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
-        if not upstream_site:
-            raise ValueError(
-                f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
-            )
         upstream_device.site = upstream_site.id
-
-        upstream_location = upstream_locations.get(upstream_site.name, {}).get(
-            device.location.name
-        )
         if upstream_location:
             upstream_device.location = upstream_location.id
-
-        upstream_device_role = upstream_device_roles_by_name.get(device.role)
-        if not upstream_device_role:
-            raise ValueError(f"Could not find device_role {device.role}")
         upstream_device.role = upstream_device_role.id
 
         try:
