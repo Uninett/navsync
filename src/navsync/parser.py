@@ -190,13 +190,15 @@ def get_locations_from_devices(
 ) -> list[Location]:
     """Extracts unique locations from a sequence of devices"""
     locations = []
-    name_set = set()
+    site_to_locations = {}
     for device in devices:
         location = device.location
-        # Only include one location per name
-        if location.name not in name_set:
+        if location.site.slug not in site_to_locations:
+            site_to_locations[location.site.slug] = set()
+        # Only include one location per name per site
+        if location.name not in site_to_locations[location.site.slug]:
             locations.append(location)
-            name_set.add(location.name)
+            site_to_locations[location.site.slug].add(location.name)
     return locations
 
 
