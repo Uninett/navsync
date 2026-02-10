@@ -899,23 +899,12 @@ class Syncer:
         namespace containing that instance's url, owner, and tenant
         """
         virtual_machines = self.netbox_api.virtualization.virtual_machines.filter(
-            role="verktykasse", status="active"
+            role="verktykassecnaas", status="active"
         )
         devices = self.netbox_api.dcim.devices.filter(
-            role="verktykasse", status="active"
+            role="verktykassecnaas", status="active"
         )
-        test_vms = self.netbox_api.virtualization.virtual_machines.filter(
-            role="testverktykasse", status="active"
-        )
-        test_devices = self.netbox_api.dcim.devices.filter(
-            role="testverktykasse", status="active"
-        )
-        test_vm_ids = {vm.id for vm in test_vms}
-        test_device_ids = {device.id for device in test_devices}
         for vm in virtual_machines:
-            if vm.id in test_vm_ids:
-                _logger.debug(f"Skipping test VM {vm.name}")
-                continue
             if "owner" not in vm.custom_fields:
                 _logger.error(
                     f"VM {vm.name} is missing custom field 'owner'. Cannot determine NAV server owner. Skipping."
@@ -934,9 +923,6 @@ class Syncer:
             )
 
         for device in devices:
-            if device.id in test_device_ids:
-                _logger.debug(f"Skipping test device {device.name}")
-                continue
             asset = self.netbox_api.plugins.inventory.assets.get(device=device)
             if not asset:
                 _logger.error(
