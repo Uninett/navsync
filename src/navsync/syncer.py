@@ -1,5 +1,6 @@
 import argparse
 import logging
+import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence, Union
@@ -146,6 +147,7 @@ class Syncer:
             sites + locations + list(devices.values()) + list(assets.values())
         )
         self.upstream_device_type_by_part_number = self._get_upstream_device_types()
+        self.upstream_manufacturers_by_slug = self._get_upstream_manufacturers()
         self.tenants = self._get_upstream_tenants()
 
         self._sync_sites(sites)
@@ -358,96 +360,165 @@ class Syncer:
             if upstream_device.status.value != "active":
                 continue
             if upstream_device.name not in devices:
-                _logger.debug(f"Decommissioning device {upstream_device.name}")
-                upstream_device.status = "inventory"
-                upstream_device.location = None
-                upstream_device.tenant = None
-                upstream_device.virtual_chassis = None
-                upstream_device.vc_position = None
-                upstream_device.save()
+                self._decomission_device(upstream_device)
 
         for device in devices.values():
             upstream_device = upstream_devices_by_name.get(device.name)
-            tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
             if upstream_device:
-                upstream_device.tenant = device.tenant
-
-                upstream_device_tag_ids = self._get_tag_ids_from_tags(
-                    upstream_device.tags
+                self._update_device(
+                    device,
+                    upstream_device,
+                    upstream_sites,
+                    upstream_locations_by_name,
+                    upstream_device_roles_by_name,
                 )
-                tag_ids += [
-                    tag_id
-                    for tag_id in upstream_device_tag_ids
-                    if tag_id not in tag_ids
-                ]
-
-                upstream_device.tags = tag_ids
-                upstream_device.status = "active"
-                upstream_site = self._get_upstream_site(
-                    upstream_sites, device.location.site
-                )
-                if not upstream_site:
-                    raise ValueError(
-                        f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
-                    )
-                upstream_device.site = upstream_site.id
-
-                upstream_location = upstream_locations_by_name.get(device.location.name)
-                if upstream_location:
-                    upstream_device.location = upstream_location.id
-
-                upstream_device_role = upstream_device_roles_by_name.get(device.role)
-                if not upstream_device_role:
-                    raise ValueError(f"Could not find device_role {device.role}")
-                upstream_device.role = upstream_device_role.id
-
-                upstream_device_type = self.upstream_device_type_by_part_number.get(
-                    device.model
-                )
-                if not upstream_device_type:
-                    _logger.error(
-                        f"Could not find device_type for model {device.model}. Not updating device_type for device {upstream_device.name}"
-                    )
-                else:
-                    upstream_device.device_type = upstream_device_type.id
-
-                if upstream_device.updates():
-                    _logger.debug(f"Updating device {upstream_device.name}")
-                    upstream_device.save()
             else:
-                upstream_site = self._get_upstream_site(
-                    upstream_sites, device.location.site
+                self._create_device(
+                    device,
+                    upstream_sites,
+                    upstream_locations_by_name,
+                    upstream_device_roles_by_name,
                 )
-                if not upstream_site:
-                    raise ValueError(
-                        f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
-                    )
-                upstream_device_type = self.upstream_device_type_by_part_number.get(
-                    device.model
-                )
-                if not upstream_device_type:
-                    _logger.error(
-                        f"Could not find device_type for model {device.model}. Skipping device {device.name}"
-                    )
-                    continue
-                upstream_device_role = upstream_device_roles_by_name.get(device.role)
-                if not upstream_device_type:
-                    raise ValueError(f"Could not find device_role {device.role}")
-                new_device_dict = {
-                    "name": device.name,
-                    "device_type": upstream_device_type.id,
-                    "role": upstream_device_role.id,
-                    "site": upstream_site.id,
-                    "tags": tag_ids,
-                    "tenant": device.tenant,
-                }
-                if upstream_location := upstream_locations_by_name.get(
-                    device.location.name
-                ):
-                    new_device_dict["location"] = upstream_location.id
 
-                _logger.debug(f"Creating new device {device.name}")
-                self.netbox_api.dcim.devices.create(**new_device_dict)
+    def _decomission_device(self, upstream_device: Record):
+        _logger.debug(f"Decommissioning device {upstream_device.name}")
+        upstream_device.status = "inventory"
+        upstream_device.location = None
+        upstream_device.tenant = None
+        upstream_device.virtual_chassis = None
+        upstream_device.vc_position = None
+        upstream_device.save()
+
+    def _create_device(
+        self,
+        device: Device,
+        upstream_sites: Sequence[Record],
+        upstream_locations_by_name: dict[NameStr, Record],
+        upstream_device_roles_by_name: dict[NameStr, Record],
+    ):
+        upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
+        if not upstream_site:
+            raise ValueError(
+                f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
+            )
+
+        try:
+            upstream_device_type = self.get_or_create_device_type(device)
+        except (RequestError, ValueError) as e:
+            _logger.error(
+                f"Got error while getting or creating device type for model {device.model}: {str(e)}. Skipping device {device.name}"
+            )
+            return
+
+        upstream_device_role = upstream_device_roles_by_name.get(device.role)
+        if not upstream_device_role:
+            raise ValueError(f"Could not find device_role {device.role}")
+        tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
+        new_device_dict = {
+            "name": device.name,
+            "device_type": upstream_device_type.id,
+            "role": upstream_device_role.id,
+            "site": upstream_site.id,
+            "tags": tag_ids,
+            "tenant": device.tenant,
+        }
+        if upstream_location := upstream_locations_by_name.get(device.location.name):
+            new_device_dict["location"] = upstream_location.id
+
+        _logger.debug(f"Creating new device {device.name}")
+        self.netbox_api.dcim.devices.create(**new_device_dict)
+
+    def _update_device(
+        self,
+        device: Device,
+        upstream_device: Record,
+        upstream_sites: Sequence[Record],
+        upstream_locations_by_name: dict[NameStr, Record],
+        upstream_device_roles_by_name: dict[NameStr, Record],
+    ):
+        tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
+        upstream_device.tenant = device.tenant
+
+        upstream_device_tag_ids = self._get_tag_ids_from_tags(upstream_device.tags)
+        tag_ids += [
+            tag_id for tag_id in upstream_device_tag_ids if tag_id not in tag_ids
+        ]
+
+        upstream_device.tags = tag_ids
+        upstream_device.status = "active"
+        upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
+        if not upstream_site:
+            raise ValueError(
+                f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
+            )
+        upstream_device.site = upstream_site.id
+
+        upstream_location = upstream_locations_by_name.get(device.location.name)
+        if upstream_location:
+            upstream_device.location = upstream_location.id
+
+        upstream_device_role = upstream_device_roles_by_name.get(device.role)
+        if not upstream_device_role:
+            raise ValueError(f"Could not find device_role {device.role}")
+        upstream_device.role = upstream_device_role.id
+
+        try:
+            upstream_device_type = self.get_or_create_device_type(device)
+        except (RequestError, ValueError) as e:
+            _logger.error(
+                f"Got error while getting or creating device type for model {device.model}: {str(e)}. Not updating device type for device {device.name}."
+            )
+        else:
+            upstream_device.device_type = upstream_device_type.id
+
+        if upstream_device.updates():
+            _logger.debug(f"Updating device {upstream_device.name}")
+            upstream_device.save()
+
+    def _get_upstream_manufacturers(self) -> dict[str, Record]:
+        """Maps slug to manufacturer Record"""
+        upstream_manufacturers = self.netbox_api.dcim.manufacturers.all()
+        return {m.slug: m for m in upstream_manufacturers}
+
+    def get_or_create_device_type(self, device: Device):
+        upstream_device_type = self.upstream_device_type_by_part_number.get(
+            device.model
+        )
+        if not upstream_device_type:
+            if device.model is None or device.manufacturer is None:
+                raise ValueError(
+                    f"Device {device.name} is missing model or manufacturer information. Cannot create device type for it."
+                )
+            upstream_manufacturer = self.get_or_create_manifacturer(device)
+            sanitized_model_name = re.sub("[^0-9a-zA-Z_-]+", "", device.model)
+            device_type_slug = "-".join(
+                f"{upstream_manufacturer.name} {sanitized_model_name}".split()
+            ).lower()
+            upstream_device_type = self.netbox_api.dcim.device_types.create(
+                manufacturer=upstream_manufacturer.id,
+                model=device.model,
+                part_number=device.model,
+                slug=device_type_slug,
+            )
+            self.upstream_device_type_by_part_number[
+                upstream_device_type.part_number
+            ] = upstream_device_type
+        return upstream_device_type
+
+    def get_or_create_manifacturer(self, device) -> Record:
+        manufacturer_slug = "-".join(device.manufacturer.split()).lower()
+        upstream_manufacturer = self.upstream_manufacturers_by_slug.get(
+            manufacturer_slug
+        )
+        if not upstream_manufacturer:
+            upstream_manufacturer = self.netbox_api.dcim.manufacturers.create(
+                name=device.manufacturer,
+                slug=manufacturer_slug,
+            )
+            self.upstream_manufacturers_by_slug[upstream_manufacturer.slug] = (
+                upstream_manufacturer
+            )
+        return upstream_manufacturer
 
     def _sync_locations(self, locations: Sequence[Location]):
         upstream_sites = self._get_upstream_sites()
