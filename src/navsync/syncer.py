@@ -450,6 +450,8 @@ class Syncer:
 
         upstream_device.tags = tag_ids
         upstream_device.status = "active"
+        if not upstream_device.description and device.description:
+            upstream_device.description = device.description
         upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
         if not upstream_site:
             raise ValueError(
