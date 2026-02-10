@@ -242,8 +242,93 @@ class Syncer:
             asset.serial: asset for asset in assets.values() if asset.serial is not None
         }
 
-        # Shelve any upstream assets that were registered by navsync
-        # but was not found in the current sync
+        self._shelve_all_missing_assets(upstream_assets_by_serial, assets_by_serial)
+
+        for device_name, asset in assets.items():
+            if not asset.serial:
+                continue
+            upstream_asset = upstream_assets_by_serial.get(asset.serial)
+            upstream_device = upstream_devices_by_name.get(device_name)
+            if upstream_device is None:
+                _logger.error(
+                    f"When syncing asset {asset.serial}, could not find its device "
+                    f"{device_name}. Skipping asset {asset.serial}"
+                )
+                continue
+
+            prior_asset = self._get_upstream_asset_for_device(
+                upstream_device.id, upstream_assets_by_serial.values()
+            )
+            if prior_asset and prior_asset.serial != asset.serial:
+                _logger.debug(
+                    f"Asset {prior_asset.serial} is currently assigned to device {upstream_device.name}. Unassigning it in favor of {asset.serial}."
+                )
+                prior_asset.device = None
+                prior_asset.save()
+                prior_asset.full_details()
+
+            if upstream_asset:
+                self._update_asset(asset, upstream_asset, upstream_device)
+            else:
+                self._create_asset(asset, upstream_device)
+
+    def _create_asset(self, asset: Asset, upstream_device: Record):
+        tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
+        new_asset_dict = {
+            "serial": asset.serial,
+            "status": asset.status,
+            "owner": asset.owner,
+            "tags": tag_ids,
+            "tenant": asset.tenant,
+            "device": upstream_device.id,
+            "device_type": upstream_device.device_type.id,
+        }
+        if asset.comments:
+            new_asset_dict["comments"] = asset.comments
+
+        _logger.debug(f"Creating new asset {asset.serial}")
+        # There is a problem where netbox sometimes returns a 500 error
+        # when you create an asset even though the asset is created successfully.
+        try:
+            self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
+        except RequestError as e:
+            _logger.error(f"Got error while creating asset {asset.serial}: {str(e)}")
+
+    def _update_asset(
+        self, asset: Asset, upstream_asset: Record, upstream_device: Record
+    ):
+        upstream_asset.device = upstream_device.id
+        upstream_asset.device_type = upstream_device.device_type.id
+        upstream_asset.owner = asset.owner
+        upstream_asset.tenant = asset.tenant
+        upstream_asset.status = asset.status
+        if not upstream_asset.comments and asset.comments:
+            upstream_asset.comments = asset.comments
+        if asset.contact is not None:
+            upstream_asset.contact = asset.contact
+        tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
+        upstream_asset_tag_ids = self._get_tag_ids_from_tags(upstream_asset.tags)
+        tag_ids += [
+            tag_id for tag_id in upstream_asset_tag_ids if tag_id not in tag_ids
+        ]
+        upstream_asset.tags = tag_ids
+        if upstream_asset.updates():
+            # There is a problem where netbox sometimes returns a 500 error
+            # when you save an asset even though the asset is saved successfully.
+            _logger.debug(f"Updating asset {upstream_asset.serial}")
+            try:
+                upstream_asset.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
+                )
+
+    def _shelve_all_missing_assets(
+        self,
+        upstream_assets_by_serial: dict[str, Record],
+        assets_by_serial: dict[str, Asset],
+    ):
+        """Shelve any upstream assets that were registered by navsync but was not found in the current sync"""
         for upstream_serial, upstream_asset in upstream_assets_by_serial.items():
             if "navsync" not in [tag.name for tag in upstream_asset.tags]:
                 continue
@@ -260,80 +345,6 @@ class Syncer:
                 except RequestError as e:
                     _logger.error(
                         f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
-                    )
-
-        for device_name, asset in assets.items():
-            if not asset.serial:
-                continue
-            upstream_asset = upstream_assets_by_serial.get(asset.serial)
-            upstream_device = upstream_devices_by_name.get(device_name)
-            if upstream_device is None:
-                _logger.error(
-                    f"When syncing asset {asset.serial}, could not find its device "
-                    f"{device_name}. Skipping asset {asset.serial}"
-                )
-                continue
-            tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
-
-            prior_asset = self._get_upstream_asset_for_device(
-                upstream_device.id, upstream_assets_by_serial.values()
-            )
-            if prior_asset and prior_asset.serial != asset.serial:
-                _logger.debug(
-                    f"Asset {prior_asset.serial} is currently assigned to device {upstream_device.name}. Unassigning it in favor of {asset.serial}."
-                )
-                prior_asset.device = None
-                prior_asset.save()
-                prior_asset.full_details()
-
-            if upstream_asset:
-                upstream_asset.device = upstream_device.id
-                upstream_asset.device_type = upstream_device.device_type.id
-                upstream_asset.owner = asset.owner
-                upstream_asset.tenant = asset.tenant
-                upstream_asset.status = asset.status
-                if not upstream_asset.comments and asset.comments:
-                    upstream_asset.comments = asset.comments
-                if asset.contact is not None:
-                    upstream_asset.contact = asset.contact
-                upstream_asset_tag_ids = self._get_tag_ids_from_tags(
-                    upstream_asset.tags
-                )
-                tag_ids += [
-                    tag_id for tag_id in upstream_asset_tag_ids if tag_id not in tag_ids
-                ]
-                upstream_asset.tags = tag_ids
-                if upstream_asset.updates():
-                    # There is a problem where netbox sometimes returns a 500 error
-                    # when you save an asset even though the asset is saved successfully.
-                    _logger.debug(f"Updating asset {upstream_asset.serial}")
-                    try:
-                        upstream_asset.save()
-                    except RequestError as e:
-                        _logger.error(
-                            f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
-                        )
-            else:
-                new_asset_dict = {
-                    "serial": asset.serial,
-                    "status": asset.status,
-                    "owner": asset.owner,
-                    "tags": tag_ids,
-                    "tenant": asset.tenant,
-                    "device": upstream_device.id,
-                    "device_type": upstream_device.device_type.id,
-                }
-                if asset.comments:
-                    new_asset_dict["comments"] = asset.comments
-
-                _logger.debug(f"Creating new asset {asset.serial}")
-                # There is a problem where netbox sometimes returns a 500 error
-                # when you create an asset even though the asset is created successfully.
-                try:
-                    self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
-                except RequestError as e:
-                    _logger.error(
-                        f"Got error while creating asset {asset.serial}: {str(e)}"
                     )
 
     def _get_upstream_asset_for_device(
