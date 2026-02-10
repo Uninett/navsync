@@ -377,7 +377,7 @@ class Syncer:
     def _sync_devices(self, devices: dict[NameStr, Device]):
         upstream_devices_by_name = self._get_upstream_devices()
         upstream_sites = self._get_upstream_sites()
-        upstream_locations_by_name = self._get_upstream_locations()
+        upstream_locations = self._get_upstream_locations()
         upstream_device_roles_by_name = self._get_upstream_device_roles()
 
         self._decommission_all_missing_devices(
@@ -386,20 +386,34 @@ class Syncer:
 
         for device in devices.values():
             upstream_device = upstream_devices_by_name.get(device.name)
+            upstream_site = self._get_upstream_site(
+                upstream_sites, device.location.site
+            )
+            if not upstream_site:
+                raise ValueError(
+                    f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
+                )
+            upstream_location = upstream_locations.get(upstream_site.name, {}).get(
+                device.location.name
+            )
+            upstream_device_role = upstream_device_roles_by_name.get(device.role)
+            if not upstream_device_role:
+                raise ValueError(f"Could not find device_role {device.role}")
+
             if upstream_device:
                 self._update_device(
                     device,
                     upstream_device,
-                    upstream_sites,
-                    upstream_locations_by_name,
-                    upstream_device_roles_by_name,
+                    upstream_site,
+                    upstream_device_role,
+                    upstream_location,
                 )
             else:
                 self._create_device(
                     device,
-                    upstream_sites,
-                    upstream_locations_by_name,
-                    upstream_device_roles_by_name,
+                    upstream_site,
+                    upstream_device_role,
+                    upstream_location,
                 )
 
     def _decommission_all_missing_devices(
@@ -424,16 +438,10 @@ class Syncer:
     def _create_device(
         self,
         device: Device,
-        upstream_sites: Sequence[Record],
-        upstream_locations_by_name: dict[NameStr, Record],
-        upstream_device_roles_by_name: dict[NameStr, Record],
+        upstream_site: Record,
+        upstream_device_role: Record,
+        upstream_location: Optional[Record] = None,
     ):
-        upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
-        if not upstream_site:
-            raise ValueError(
-                f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
-            )
-
         try:
             upstream_device_type = self.get_or_create_device_type(device)
         except (RequestError, ValueError) as e:
@@ -442,9 +450,6 @@ class Syncer:
             )
             return
 
-        upstream_device_role = upstream_device_roles_by_name.get(device.role)
-        if not upstream_device_role:
-            raise ValueError(f"Could not find device_role {device.role}")
         tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
         new_device_dict = {
             "name": device.name,
@@ -454,7 +459,7 @@ class Syncer:
             "tags": tag_ids,
             "tenant": device.tenant,
         }
-        if upstream_location := upstream_locations_by_name.get(device.location.name):
+        if upstream_location:
             new_device_dict["location"] = upstream_location.id
         if device.description:
             new_device_dict["description"] = device.description
@@ -466,9 +471,9 @@ class Syncer:
         self,
         device: Device,
         upstream_device: Record,
-        upstream_sites: Sequence[Record],
-        upstream_locations_by_name: dict[NameStr, Record],
-        upstream_device_roles_by_name: dict[NameStr, Record],
+        upstream_site: Record,
+        upstream_device_role: Record,
+        upstream_location: Optional[Record] = None,
     ):
         tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
         upstream_device.tenant = device.tenant
@@ -482,20 +487,9 @@ class Syncer:
         upstream_device.status = "active"
         if not upstream_device.description and device.description:
             upstream_device.description = device.description
-        upstream_site = self._get_upstream_site(upstream_sites, device.location.site)
-        if not upstream_site:
-            raise ValueError(
-                f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
-            )
         upstream_device.site = upstream_site.id
-
-        upstream_location = upstream_locations_by_name.get(device.location.name)
         if upstream_location:
             upstream_device.location = upstream_location.id
-
-        upstream_device_role = upstream_device_roles_by_name.get(device.role)
-        if not upstream_device_role:
-            raise ValueError(f"Could not find device_role {device.role}")
         upstream_device.role = upstream_device_role.id
 
         try:
@@ -564,21 +558,23 @@ class Syncer:
 
     def _sync_locations(self, locations: Sequence[Location]):
         upstream_sites = self._get_upstream_sites()
-        upstream_locations_by_name = self._get_upstream_locations()
+        upstream_locations = self._get_upstream_locations()
 
         for location in locations:
-            upstream_location = upstream_locations_by_name.get(location.name)
-            if upstream_location:
-                self._update_location(location, upstream_location, upstream_sites)
-            else:
-                self._create_location(location, upstream_sites)
-
-    def _create_location(self, location: Location, upstream_sites: Sequence[Record]):
-        upstream_site = self._get_upstream_site(upstream_sites, location.site)
-        if not upstream_site:
-            raise ValueError(
-                f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
+            upstream_site = self._get_upstream_site(upstream_sites, location.site)
+            if not upstream_site:
+                raise ValueError(
+                    f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
+                )
+            upstream_location = upstream_locations.get(upstream_site.name, {}).get(
+                location.name
             )
+            if upstream_location:
+                self._update_location(location, upstream_location, upstream_site)
+            else:
+                self._create_location(location, upstream_site)
+
+    def _create_location(self, location: Location, upstream_site: Record):
         tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
         new_location_dict = {
             "site": upstream_site.id,
@@ -597,7 +593,7 @@ class Syncer:
         self,
         location: Location,
         upstream_location: Record,
-        upstream_sites: Sequence[Record],
+        upstream_site: Record,
     ):
         upstream_location.tenant = location.tenant
         if not upstream_location.description and location.description:
@@ -611,11 +607,6 @@ class Syncer:
 
         upstream_location.tags = tag_ids
         upstream_location.status = location.status
-        upstream_site = self._get_upstream_site(upstream_sites, location.site)
-        if not upstream_site:
-            raise ValueError(
-                f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
-            )
         upstream_location.site = upstream_site.id
         if upstream_location.updates():
             _logger.debug(f"Updating location {upstream_location.name}")
@@ -750,11 +741,14 @@ class Syncer:
             for device_role in self.netbox_api.dcim.device_roles.all()
         }
 
-    def _get_upstream_locations(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to location"""
-        return {
-            location.name: location for location in self.netbox_api.dcim.locations.all()
-        }
+    def _get_upstream_locations(self) -> dict[NameStr, dict[NameStr, Record]]:
+        """Returns dict of dicts mapping sites and location names to location Records. The first dict maps site name to a dict, and the second dict maps location name to location Record"""
+        locations = {}
+        for location in self.netbox_api.dcim.locations.all():
+            if location.site.name not in locations:
+                locations[location.site.name] = {}
+            locations[location.site.name][location.name] = location
+        return locations
 
     def _get_upstream_devices(self) -> dict[NameStr, Record]:
         """Returns dict mapping name to device"""
