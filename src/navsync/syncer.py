@@ -320,6 +320,8 @@ class Syncer:
                     "device": upstream_device.id,
                     "device_type": upstream_device.device_type.id,
                 }
+                if asset.comments:
+                    new_asset_dict["comments"] = asset.comments
 
                 _logger.debug(f"Creating new asset {asset.serial}")
                 # There is a problem where netbox sometimes returns a 500 error
