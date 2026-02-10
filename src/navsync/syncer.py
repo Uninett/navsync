@@ -1,6 +1,5 @@
 import argparse
 import logging
-import re
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence, Union
@@ -27,6 +26,7 @@ from navsync.parser import (
 from navsync.utils import (
     NavServerInfo,
     init_logging,
+    sanitize_slug,
     url_with_http,
     url_with_https,
 )
@@ -496,10 +496,9 @@ class Syncer:
                     f"Device {device.name} is missing model or manufacturer information. Cannot create device type for it."
                 )
             upstream_manufacturer = self.get_or_create_manifacturer(device)
-            sanitized_model_name = re.sub("[^0-9a-zA-Z_-]+", "", device.model)
-            device_type_slug = "-".join(
-                f"{upstream_manufacturer.name} {sanitized_model_name}".split()
-            ).lower()
+            device_type_slug = sanitize_slug(
+                f"{upstream_manufacturer.name} {device.model}"
+            )
             upstream_device_type = self.netbox_api.dcim.device_types.create(
                 manufacturer=upstream_manufacturer.id,
                 model=device.model,
@@ -512,7 +511,7 @@ class Syncer:
         return upstream_device_type
 
     def get_or_create_manifacturer(self, device) -> Record:
-        manufacturer_slug = "-".join(device.manufacturer.split()).lower()
+        manufacturer_slug = sanitize_slug(device.manufacturer)
         upstream_manufacturer = self.upstream_manufacturers_by_slug.get(
             manufacturer_slug
         )
@@ -567,7 +566,7 @@ class Syncer:
                 new_location_dict = {
                     "site": upstream_site.id,
                     "name": location.name,
-                    "slug": "-".join(location.name.split()).lower(),
+                    "slug": sanitize_slug(location.name),
                     "status": location.status,
                     "tags": tag_ids,
                     "tenant": location.tenant,
