@@ -146,7 +146,10 @@ class Syncer:
         self.tags = self._get_or_create_tags(
             sites + locations + list(devices.values()) + list(assets.values())
         )
-        self.upstream_device_type_by_part_number = self._get_upstream_device_types()
+        self.upstream_device_types_by_part_number = (
+            self._get_upstream_device_types_by_part_number()
+        )
+        self.upstream_device_types_by_slug = self._get_upstream_device_types_by_slug()
         self.upstream_manufacturers_by_slug = self._get_upstream_manufacturers()
         self.tenants = self._get_upstream_tenants()
 
@@ -487,7 +490,7 @@ class Syncer:
         return {m.slug: m for m in upstream_manufacturers}
 
     def get_or_create_device_type(self, device: Device):
-        upstream_device_type = self.upstream_device_type_by_part_number.get(
+        upstream_device_type = self.upstream_device_types_by_part_number.get(
             device.model
         )
         if not upstream_device_type:
@@ -499,15 +502,22 @@ class Syncer:
             device_type_slug = sanitize_slug(
                 f"{upstream_manufacturer.name} {device.model}"
             )
-            upstream_device_type = self.netbox_api.dcim.device_types.create(
-                manufacturer=upstream_manufacturer.id,
-                model=device.model,
-                part_number=device.model,
-                slug=device_type_slug,
+            upstream_device_type = self.upstream_device_types_by_slug.get(
+                device_type_slug
             )
-            self.upstream_device_type_by_part_number[
-                upstream_device_type.part_number
-            ] = upstream_device_type
+            if not upstream_device_type:
+                upstream_device_type = self.netbox_api.dcim.device_types.create(
+                    manufacturer=upstream_manufacturer.id,
+                    model=device.model,
+                    part_number=device.model,
+                    slug=device_type_slug,
+                )
+                self.upstream_device_types_by_part_number[
+                    upstream_device_type.part_number
+                ] = upstream_device_type
+                self.upstream_device_types_by_slug[upstream_device_type.slug] = (
+                    upstream_device_type
+                )
         return upstream_device_type
 
     def get_or_create_manifacturer(self, device: Device) -> Record:
@@ -684,10 +694,17 @@ class Syncer:
         """Returns dict mapping name to tenant"""
         return {tenant.name: tenant for tenant in self.netbox_api.tenancy.tenants.all()}
 
-    def _get_upstream_device_types(self) -> dict[str, Record]:
+    def _get_upstream_device_types_by_part_number(self) -> dict[str, Record]:
         """Returns dict mapping part number to device type"""
         return {
             device_type.part_number: device_type
+            for device_type in self.netbox_api.dcim.device_types.all()
+        }
+
+    def _get_upstream_device_types_by_slug(self) -> dict[str, Record]:
+        """Returns dict mapping slug to device type"""
+        return {
+            device_type.slug: device_type
             for device_type in self.netbox_api.dcim.device_types.all()
         }
 
