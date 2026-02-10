@@ -510,7 +510,7 @@ class Syncer:
             ] = upstream_device_type
         return upstream_device_type
 
-    def get_or_create_manifacturer(self, device) -> Record:
+    def get_or_create_manifacturer(self, device: Device) -> Record:
         manufacturer_slug = sanitize_slug(device.manufacturer)
         upstream_manufacturer = self.upstream_manufacturers_by_slug.get(
             manufacturer_slug
