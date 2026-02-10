@@ -557,50 +557,58 @@ class Syncer:
 
         for location in locations:
             upstream_location = upstream_locations_by_name.get(location.name)
-            tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
             if upstream_location:
-                upstream_location.tenant = location.tenant
-                if not upstream_location.description and location.description:
-                    upstream_location.description = location.description
-
-                upstream_location_tag_ids = self._get_tag_ids_from_tags(
-                    upstream_location.tags
-                )
-                tag_ids += [
-                    tag_id
-                    for tag_id in upstream_location_tag_ids
-                    if tag_id not in tag_ids
-                ]
-
-                upstream_location.tags = tag_ids
-                upstream_location.status = location.status
-                upstream_site = self._get_upstream_site(upstream_sites, location.site)
-                if not upstream_site:
-                    raise ValueError(
-                        f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
-                    )
-                upstream_location.site = upstream_site.id
-                if upstream_location.updates():
-                    _logger.debug(f"Updating location {upstream_location.name}")
-                    upstream_location.save()
+                self._update_location(location, upstream_location, upstream_sites)
             else:
-                upstream_site = self._get_upstream_site(upstream_sites, location.site)
-                if not upstream_site:
-                    raise ValueError(
-                        f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
-                    )
-                new_location_dict = {
-                    "site": upstream_site.id,
-                    "name": location.name,
-                    "slug": sanitize_slug(location.name),
-                    "status": location.status,
-                    "tags": tag_ids,
-                    "tenant": location.tenant,
-                }
-                if location.description:
-                    new_location_dict["description"] = location.description
-                _logger.debug(f"Creating new location {location.name}")
-                self.netbox_api.dcim.locations.create(**new_location_dict)
+                self._create_location(location, upstream_sites)
+
+    def _create_location(self, location: Location, upstream_sites: Sequence[Record]):
+        upstream_site = self._get_upstream_site(upstream_sites, location.site)
+        if not upstream_site:
+            raise ValueError(
+                f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
+            )
+        tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
+        new_location_dict = {
+            "site": upstream_site.id,
+            "name": location.name,
+            "slug": sanitize_slug(location.name),
+            "status": location.status,
+            "tags": tag_ids,
+            "tenant": location.tenant,
+        }
+        if location.description:
+            new_location_dict["description"] = location.description
+        _logger.debug(f"Creating new location {location.name}")
+        self.netbox_api.dcim.locations.create(**new_location_dict)
+
+    def _update_location(
+        self,
+        location: Location,
+        upstream_location: Record,
+        upstream_sites: Sequence[Record],
+    ):
+        upstream_location.tenant = location.tenant
+        if not upstream_location.description and location.description:
+            upstream_location.description = location.description
+
+        tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
+        upstream_location_tag_ids = self._get_tag_ids_from_tags(upstream_location.tags)
+        tag_ids += [
+            tag_id for tag_id in upstream_location_tag_ids if tag_id not in tag_ids
+        ]
+
+        upstream_location.tags = tag_ids
+        upstream_location.status = location.status
+        upstream_site = self._get_upstream_site(upstream_sites, location.site)
+        if not upstream_site:
+            raise ValueError(
+                f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
+            )
+        upstream_location.site = upstream_site.id
+        if upstream_location.updates():
+            _logger.debug(f"Updating location {upstream_location.name}")
+            upstream_location.save()
 
     def _sync_sites(self, sites: Sequence[Site]):
         upstream_sites = self._get_upstream_sites()
