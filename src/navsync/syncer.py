@@ -567,18 +567,18 @@ class Syncer:
         upstream_locations_by_name = self._get_upstream_locations()
 
         for location in locations:
+            upstream_site = self._get_upstream_site(upstream_sites, location.site)
+            if not upstream_site:
+                raise ValueError(
+                    f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
+                )
             upstream_location = upstream_locations_by_name.get(location.name)
             if upstream_location:
-                self._update_location(location, upstream_location, upstream_sites)
+                self._update_location(location, upstream_location, upstream_site)
             else:
-                self._create_location(location, upstream_sites)
+                self._create_location(location, upstream_site)
 
-    def _create_location(self, location: Location, upstream_sites: Sequence[Record]):
-        upstream_site = self._get_upstream_site(upstream_sites, location.site)
-        if not upstream_site:
-            raise ValueError(
-                f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
-            )
+    def _create_location(self, location: Location, upstream_site: Record):
         tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
         new_location_dict = {
             "site": upstream_site.id,
@@ -597,7 +597,7 @@ class Syncer:
         self,
         location: Location,
         upstream_location: Record,
-        upstream_sites: Sequence[Record],
+        upstream_site: Record,
     ):
         upstream_location.tenant = location.tenant
         if not upstream_location.description and location.description:
@@ -611,11 +611,6 @@ class Syncer:
 
         upstream_location.tags = tag_ids
         upstream_location.status = location.status
-        upstream_site = self._get_upstream_site(upstream_sites, location.site)
-        if not upstream_site:
-            raise ValueError(
-                f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
-            )
         upstream_location.site = upstream_site.id
         if upstream_location.updates():
             _logger.debug(f"Updating location {upstream_location.name}")
