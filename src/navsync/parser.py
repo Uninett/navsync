@@ -499,6 +499,9 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
         "addr",
         "addresse",
         "site",
+        "Adr",
+        "Addr",
+        "adresse",
     ]
 
     room_data = navbox.room_data

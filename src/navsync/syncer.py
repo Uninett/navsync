@@ -768,6 +768,7 @@ class Syncer:
             if (
                 upstream_site.slug == site.slug
                 or upstream_site.physical_address == site.physical_address
+                or upstream_site.name == site.name
             ):
                 return upstream_site
 
