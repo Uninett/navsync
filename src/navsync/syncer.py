@@ -503,7 +503,12 @@ class Syncer:
 
         if upstream_device.updates():
             _logger.debug(f"Updating device {upstream_device.name}")
-            upstream_device.save()
+            try:
+                upstream_device.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Got error while updating device {device.name}: {str(e)}"
+                )
 
     def _get_upstream_manufacturers(self) -> dict[str, Record]:
         """Maps slug to manufacturer Record"""
