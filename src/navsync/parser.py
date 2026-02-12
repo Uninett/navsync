@@ -354,8 +354,6 @@ def _try_parse_unknown(navbox: NavBox, navinfo: NavServerInfo):
 
 
 def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Device:
-    if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
-        raise NextAttempt
     if not navbox.entities:
         raise NextAttempt
     physical_chassises = [
