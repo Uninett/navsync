@@ -355,6 +355,9 @@ def _try_parse_unknown(navbox: NavBox, navinfo: NavServerInfo):
 
 def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Device:
     if not navbox.entities:
+        _logger.warning(
+            f"Failed to find entities for Navbox {navbox.sysname}. Cannot parse as physical chassis."
+        )
         raise NextAttempt
     physical_chassises = [
         e for e in navbox.entities if e.physical_class == IANAPhysicalClass.CHASSIS
