@@ -381,7 +381,7 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
 
 
 def _parse_unknown_chassis(navbox: NavBox, chassis: NavBoxEntity):
-    raise NextAttempt([])
+    raise NextAttempt()
 
 
 def _parse_virtual_chassis(
