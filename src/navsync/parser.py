@@ -458,6 +458,10 @@ def _get_device_role_from_navbox(navbox: NavBox) -> str:
         return "switch"
     elif category == "POWER":
         return "PDU"
+    elif category == "SRV":
+        return "server"
+    elif category == "ENV":
+        return "Uninett Environmental"
     else:
         return "unknown"
 
