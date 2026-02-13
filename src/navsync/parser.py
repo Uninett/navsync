@@ -246,6 +246,20 @@ def _try_parse_standard_virtual_chassis(
         if e.physical_class == IANAPhysicalClass.CHASSIS
     ]
 
+    if len(physical_chassises) == 1:
+        _logger.warning(
+            f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
+            f"physicall chassis"
+        )
+        raise NextAttempt
+    if len(physical_chassises) == 0:
+        _logger.warning(
+            f"Navbox {navbox.sysname} looks like a virtual chassis, but with 0 "
+            f"physicall chassis"
+        )
+        raise NextAttempt
+
+
     sub_stacks = [
         e
         for e in virtual_chassis.children
@@ -318,6 +332,13 @@ def _try_parse_juniper_virtual_chassis(
     ):
         _logger.warning(
             f"Failed to find matching serial number between virtual chassis and one of its physical chassis in Navbox {navbox.sysname}"
+        )
+        raise NextAttempt
+
+    if len(physical_chassises) == 1:
+        _logger.warning(
+            f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
+            f"physicall chassis"
         )
         raise NextAttempt
 
