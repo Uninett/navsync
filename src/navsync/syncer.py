@@ -210,9 +210,15 @@ class Syncer:
         if virtual_chassis.comments:
             new_virtual_chassis["comments"] = virtual_chassis.comments
         _logger.debug(f"Creating new virtual chassis {virtual_chassis.name}")
-        created_virtual_chassis = self.netbox_api.dcim.virtual_chassis.create(
-            **new_virtual_chassis
-        )
+        try:
+            created_virtual_chassis = self.netbox_api.dcim.virtual_chassis.create(
+                **new_virtual_chassis
+            )
+        except RequestError as e:
+            _logger.error(
+                f"Failed to create virtual chassis {virtual_chassis.name}: {e}"
+            )
+            return
         self._register_devices_as_members_of_vc(
             virtual_chassis.devices, upstream_devices, created_virtual_chassis
         )
@@ -244,7 +250,12 @@ class Syncer:
         upstream_virtual_chassis.tags = tag_ids
         if upstream_virtual_chassis.updates():
             _logger.debug(f"Updating virtual chassis {upstream_virtual_chassis.name}")
-            upstream_virtual_chassis.save()
+            try:
+                upstream_virtual_chassis.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to update virtual chassis {upstream_virtual_chassis.name}: {e}"
+                )
 
     def _sync_assets(self, assets: dict[NameStr, Asset]):
         upstream_devices_by_name = self._get_upstream_devices()
@@ -303,7 +314,7 @@ class Syncer:
         try:
             self.netbox_api.plugins.inventory.assets.create(**new_asset_dict)
         except RequestError as e:
-            _logger.error(f"Got error while creating asset {asset.serial}: {str(e)}")
+            _logger.error(f"Failed to create asset {asset.serial}: {str(e)}")
 
     def _update_asset(
         self, asset: Asset, upstream_asset: Record, upstream_device: Record
@@ -331,7 +342,7 @@ class Syncer:
                 upstream_asset.save()
             except RequestError as e:
                 _logger.error(
-                    f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
+                    f"Failed to update asset {upstream_asset.serial}: {str(e)}"
                 )
 
     def _shelve_all_missing_assets(
@@ -356,7 +367,7 @@ class Syncer:
                 upstream_asset.save()
             except RequestError as e:
                 _logger.error(
-                    f"Got error while updating asset {upstream_asset.serial}: {str(e)}"
+                    f"Failed to shelve asset {upstream_asset.serial}: {str(e)}"
                 )
 
     def _get_upstream_asset_for_device(
@@ -433,7 +444,12 @@ class Syncer:
             upstream_device.tenant = None
             upstream_device.virtual_chassis = None
             upstream_device.vc_position = None
-            upstream_device.save()
+            try:
+                upstream_device.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to decommission device {upstream_device.name}: {e}"
+                )
 
     def _create_device(
         self,
@@ -465,7 +481,10 @@ class Syncer:
             new_device_dict["description"] = device.description
 
         _logger.debug(f"Creating new device {device.name}")
-        self.netbox_api.dcim.devices.create(**new_device_dict)
+        try:
+            self.netbox_api.dcim.devices.create(**new_device_dict)
+        except RequestError as e:
+            _logger.error(f"Failed to create device {device.name}: {str(e)}")
 
     def _update_device(
         self,
@@ -503,7 +522,10 @@ class Syncer:
 
         if upstream_device.updates():
             _logger.debug(f"Updating device {upstream_device.name}")
-            upstream_device.save()
+            try:
+                upstream_device.save()
+            except RequestError as e:
+                _logger.error(f"Failed to update device {device.name}: {str(e)}")
 
     def _get_upstream_manufacturers(self) -> dict[str, Record]:
         """Maps slug to manufacturer Record"""
@@ -587,7 +609,10 @@ class Syncer:
         if location.description:
             new_location_dict["description"] = location.description
         _logger.debug(f"Creating new location {location.name}")
-        self.netbox_api.dcim.locations.create(**new_location_dict)
+        try:
+            self.netbox_api.dcim.locations.create(**new_location_dict)
+        except RequestError as e:
+            _logger.error(f"Failed to create location {location.name}: {e}")
 
     def _update_location(
         self,
@@ -610,7 +635,12 @@ class Syncer:
         upstream_location.site = upstream_site.id
         if upstream_location.updates():
             _logger.debug(f"Updating location {upstream_location.name}")
-            upstream_location.save()
+            try:
+                upstream_location.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to update location {upstream_location.name}: {str(e)}"
+                )
 
     def _sync_sites(self, sites: Sequence[Site]):
         upstream_sites = self._get_upstream_sites()
@@ -654,7 +684,10 @@ class Syncer:
         upstream_site.status = site.status
         if upstream_site.updates():
             _logger.debug(f"Updating site {upstream_site.name}")
-            upstream_site.save()
+            try:
+                upstream_site.save()
+            except RequestError as e:
+                _logger.error(f"Failed to update site {upstream_site.name}: {str(e)}")
 
     def _create_site(self, site: Site):
         tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
@@ -677,7 +710,10 @@ class Syncer:
         if site.region:
             new_site_dict["region"] = site.region
         _logger.debug(f"Creating new site {site.name}")
-        self.netbox_api.dcim.sites.create(**new_site_dict)
+        try:
+            self.netbox_api.dcim.sites.create(**new_site_dict)
+        except RequestError as e:
+            _logger.error(f"Failed to create site {site.name}: {e}")
 
     def _convert_tag_names_to_ids(
         self, tag_names: list[NameStr], all_tags: dict[NameStr, int]

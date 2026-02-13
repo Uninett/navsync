@@ -354,9 +354,10 @@ def _try_parse_unknown(navbox: NavBox, navinfo: NavServerInfo):
 
 
 def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Device:
-    if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
-        raise NextAttempt
     if not navbox.entities:
+        _logger.warning(
+            f"Failed to find entities for Navbox {navbox.sysname}. Cannot parse as physical chassis."
+        )
         raise NextAttempt
     physical_chassises = [
         e for e in navbox.entities if e.physical_class == IANAPhysicalClass.CHASSIS
@@ -381,7 +382,7 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
 
 
 def _parse_unknown_chassis(navbox: NavBox, chassis: NavBoxEntity):
-    raise NextAttempt([])
+    raise NextAttempt()
 
 
 def _parse_virtual_chassis(
@@ -458,6 +459,10 @@ def _get_device_role_from_navbox(navbox: NavBox) -> str:
         return "switch"
     elif category == "POWER":
         return "PDU"
+    elif category == "SRV":
+        return "server"
+    elif category == "ENV":
+        return "Uninett Environmental"
     else:
         return "unknown"
 
