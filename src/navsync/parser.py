@@ -474,6 +474,7 @@ def _parse_asset(navbox: NavBox, entity: NavBoxEntity, navinfo: NavServerInfo) -
         model=navbox.type_name.upper() if navbox.type_name is not None else None,
         owner=navinfo.owner_id,
         tenant=navinfo.tenant_id,
+        comments=entity.description if entity.description else None,
     )
 
 
