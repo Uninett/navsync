@@ -146,7 +146,7 @@ def get_netbox_entities(
         _try_parse_standard_virtual_router,
         # Depends on:
         # - All other attempts except: _try_parse_physical_chassis
-        _try_parse_propietary_mib,
+        _try_parse_proprietary_mib,
         # Depends on:
         # - All other attempts, this is regarded as a fallback
         _try_parse_physical_chassis,
@@ -354,7 +354,7 @@ def _try_parse_standard_virtual_router(navbox: NavBox, navinfo: NavServerInfo):
     raise NextAttempt
 
 
-def _try_parse_propietary_mib(navbox: NavBox, navinfo: NavServerInfo):
+def _try_parse_proprietary_mib(navbox: NavBox, navinfo: NavServerInfo):
     """
     Checks if navbox
     - has incomplete data based on a propietary MIB instead of EntityMIB
