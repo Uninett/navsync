@@ -360,6 +360,9 @@ def _try_parse_proprietary_mib(navbox: NavBox, navinfo: NavServerInfo):
     Currently this does not attempt to parse any navboxes based on propietary MIB data.
     Hopefully this will be changed in the future.
     """
+    # These are the only ones that can be virtual chassis?
+    if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
+        raise NextAttempt
     if len(navbox.entities) != 1:
         raise NextAttempt
 
