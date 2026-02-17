@@ -359,8 +359,11 @@ def _try_parse_propietary_mib(navbox: NavBox, navinfo: NavServerInfo):
     Checks if navbox
     - has incomplete data based on a propietary MIB instead of EntityMIB
 
-    If so, attempts to ask user for additional information and parse as device
-    Otherwise, skips ahead to either next parse attempt or next navbox as appropriate
+    If so, cancels the sync for the given navbox, because the data is not sufficient to
+    parse it properly.
+
+    Currently this does not attempt to parse any navboxes based on propietary MIB data.
+    Hopefully this will be changed in the future.
     """
     if len(navbox.entities) != 1:
         raise NextAttempt
