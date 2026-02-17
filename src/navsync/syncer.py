@@ -158,7 +158,7 @@ class Syncer:
         self._sync_devices(devices)
         self._sync_assets(assets)
 
-        self._sync_virtual_chassis(chassis.values())
+        self._sync_virtual_chassis(chassis)
 
     @classmethod
     def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
@@ -184,10 +184,14 @@ class Syncer:
             https=https,
         )
 
-    def _sync_virtual_chassis(self, chassis: Sequence[VirtualChassis]):
+    def _sync_virtual_chassis(self, chassis: dict[NameStr, VirtualChassis]):
         upstream_chassis = self._get_upstream_chassis()
         upstream_devices = self._get_upstream_devices()
-        for virtual_chassis in chassis:
+
+        self._delete_all_missing_virtual_chassis(
+            chassis, upstream_chassis, upstream_devices.values()
+        )
+        for virtual_chassis in chassis.values():
             upstream_virtual_chassis = upstream_chassis.get(virtual_chassis.name)
             if upstream_virtual_chassis:
                 self._update_virtual_chassis(
@@ -195,6 +199,50 @@ class Syncer:
                 )
             else:
                 self._create_virtual_chassis(virtual_chassis, upstream_devices)
+
+    def _delete_all_missing_virtual_chassis(
+        self,
+        chassis: dict[NameStr, VirtualChassis],
+        upstream_chassis: dict[NameStr, Record],
+        upstream_devices: Sequence[Record],
+    ):
+        """Deletes any upstream virtual chassis that were registered by navsync but were not found in the current sync"""
+        for upstream_name, upstream_vc in upstream_chassis.items():
+            if upstream_name in chassis:
+                continue
+            if "navsync" not in [tag.name for tag in upstream_vc.tags]:
+                continue
+            try:
+                self._unregister_devices_as_members_of_vc(upstream_vc, upstream_devices)
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to unregister devices from virtual chassis {upstream_vc.name}: {e}"
+                )
+                return
+            _logger.debug(f"Deleting virtual chassis {upstream_vc.name}")
+            try:
+                upstream_vc.delete()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to delete virtual chassis {upstream_vc.name}: {e}"
+                )
+
+    def _unregister_devices_as_members_of_vc(
+        self, virtual_chassis: VirtualChassis, upstream_devices: Sequence[Record]
+    ):
+        """Unregisters all members of `virtual_chassis`. Uses `upstream_devices` to find the members and update them accordingly."""
+        for upstream_device in upstream_devices:
+            if (
+                upstream_device.virtual_chassis
+                and upstream_device.virtual_chassis.id == virtual_chassis.id
+            ):
+                _logger.debug(
+                    f"Unregistering device {upstream_device.name} from virtual chassis {virtual_chassis.name}"
+                )
+                upstream_device.virtual_chassis.id = None
+                upstream_device.vc_position = None
+                upstream_device.save()
+                upstream_device.full_details()
 
     def _create_virtual_chassis(
         self, virtual_chassis: VirtualChassis, upstream_devices: dict[NameStr, Record]
@@ -490,8 +538,6 @@ class Syncer:
 
         upstream_device.tags = tag_ids
         upstream_device.status = "active"
-        if not upstream_device.description and device.description:
-            upstream_device.description = device.description
         upstream_device.site = upstream_site.id
         if upstream_location:
             upstream_device.location = upstream_location.id
