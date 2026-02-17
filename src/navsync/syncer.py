@@ -205,10 +205,6 @@ class Syncer:
             "tenant": virtual_chassis.tenant,
             "tags": tag_ids,
         }
-        if virtual_chassis.description:
-            new_virtual_chassis["description"] = virtual_chassis.description
-        if virtual_chassis.comments:
-            new_virtual_chassis["comments"] = virtual_chassis.comments
         _logger.debug(f"Creating new virtual chassis {virtual_chassis.name}")
         try:
             created_virtual_chassis = self.netbox_api.dcim.virtual_chassis.create(
@@ -232,10 +228,6 @@ class Syncer:
         self._register_devices_as_members_of_vc(
             virtual_chassis.devices, upstream_devices, upstream_virtual_chassis
         )
-        if not upstream_virtual_chassis.description and virtual_chassis.description:
-            upstream_virtual_chassis.description = virtual_chassis.description
-        if not upstream_virtual_chassis.comments and virtual_chassis.comments:
-            upstream_virtual_chassis.comments = virtual_chassis.comments
         if virtual_chassis.tenant:
             upstream_virtual_chassis.tenant = virtual_chassis.tenant
         tag_ids = self._convert_tag_names_to_ids(virtual_chassis.tags, self.tags)
@@ -305,8 +297,6 @@ class Syncer:
             "device": upstream_device.id,
             "device_type": upstream_device.device_type.id,
         }
-        if asset.comments:
-            new_asset_dict["comments"] = asset.comments
 
         _logger.debug(f"Creating new asset {asset.serial}")
         # There is a problem where netbox sometimes returns a 500 error
@@ -324,8 +314,6 @@ class Syncer:
         upstream_asset.owner = asset.owner
         upstream_asset.tenant = asset.tenant
         upstream_asset.status = asset.status
-        if not upstream_asset.comments and asset.comments:
-            upstream_asset.comments = asset.comments
         if asset.contact is not None:
             upstream_asset.contact = asset.contact
         tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
@@ -477,8 +465,6 @@ class Syncer:
         }
         if upstream_location:
             new_device_dict["location"] = upstream_location.id
-        if device.description:
-            new_device_dict["description"] = device.description
 
         _logger.debug(f"Creating new device {device.name}")
         try:
