@@ -146,7 +146,7 @@ def get_netbox_entities(
         _try_parse_standard_virtual_router,
         # Depends on:
         # - All other attempts except: _try_parse_physical_chassis
-        _try_parse_propietary_mib,
+        _try_parse_proprietary_mib,
         # Depends on:
         # - All other attempts, this is regarded as a fallback
         _try_parse_physical_chassis,
@@ -354,13 +354,16 @@ def _try_parse_standard_virtual_router(navbox: NavBox, navinfo: NavServerInfo):
     raise NextAttempt
 
 
-def _try_parse_propietary_mib(navbox: NavBox, navinfo: NavServerInfo):
+def _try_parse_proprietary_mib(navbox: NavBox, navinfo: NavServerInfo):
     """
     Checks if navbox
     - has incomplete data based on a propietary MIB instead of EntityMIB
 
-    If so, attempts to ask user for additional information and parse as device
-    Otherwise, skips ahead to either next parse attempt or next navbox as appropriate
+    If so, cancels the sync for the given navbox, because the data is not sufficient to
+    parse it properly.
+
+    Currently this does not attempt to parse any navboxes based on propietary MIB data.
+    Hopefully this will be changed in the future.
     """
     if len(navbox.entities) != 1:
         raise NextAttempt
@@ -374,7 +377,13 @@ def _try_parse_propietary_mib(navbox: NavBox, navinfo: NavServerInfo):
     if chassis.parent_relpos is not None:
         raise NextAttempt
 
-    return _parse_priopietary_mib_chassis(navbox, chassis)
+    _logger.error(
+        f"Navbox {navbox.sysname} has propietary mib data, which is not enough for "
+        f"Navsync to decide whether it is a virtual chassis or not, and thus won't be "
+        f"synced."
+    )
+    # This will cancel all subsequent attempts, ensuring it does not get synced
+    raise NextAttempt([])
 
 
 def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Device:
@@ -403,16 +412,6 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
         chassis,
     )
     return device
-
-
-def _parse_priopietary_mib_chassis(navbox: NavBox, chassis: NavBoxEntity):
-    _logger.error(
-        f"Navbox {navbox.sysname} has propietary mib data, which is not enough for "
-        f"Navsync to decide whether it is a virtual chassis or not, and thus won't be "
-        f"synced."
-    )
-    # This will cancel all subsequent attempts, ensuring it does not get synced
-    raise NextAttempt([])
 
 
 def _parse_virtual_chassis(
