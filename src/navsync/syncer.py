@@ -158,7 +158,7 @@ class Syncer:
         self._sync_devices(devices)
         self._sync_assets(assets)
 
-        self._sync_virtual_chassis(chassis.values())
+        self._sync_virtual_chassis(chassis)
 
     @classmethod
     def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
@@ -184,10 +184,11 @@ class Syncer:
             https=https,
         )
 
-    def _sync_virtual_chassis(self, chassis: Sequence[VirtualChassis]):
+    def _sync_virtual_chassis(self, chassis: dict[NameStr, VirtualChassis]):
         upstream_chassis = self._get_upstream_chassis()
         upstream_devices = self._get_upstream_devices()
-        for virtual_chassis in chassis:
+
+        for virtual_chassis in chassis.values():
             upstream_virtual_chassis = upstream_chassis.get(virtual_chassis.name)
             if upstream_virtual_chassis:
                 self._update_virtual_chassis(
