@@ -377,7 +377,13 @@ def _try_parse_propietary_mib(navbox: NavBox, navinfo: NavServerInfo):
     if chassis.parent_relpos is not None:
         raise NextAttempt
 
-    return _parse_priopietary_mib_chassis(navbox, chassis)
+    _logger.error(
+        f"Navbox {navbox.sysname} has propietary mib data, which is not enough for "
+        f"Navsync to decide whether it is a virtual chassis or not, and thus won't be "
+        f"synced."
+    )
+    # This will cancel all subsequent attempts, ensuring it does not get synced
+    raise NextAttempt([])
 
 
 def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Device:
@@ -406,16 +412,6 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
         chassis,
     )
     return device
-
-
-def _parse_priopietary_mib_chassis(navbox: NavBox, chassis: NavBoxEntity):
-    _logger.error(
-        f"Navbox {navbox.sysname} has propietary mib data, which is not enough for "
-        f"Navsync to decide whether it is a virtual chassis or not, and thus won't be "
-        f"synced."
-    )
-    # This will cancel all subsequent attempts, ensuring it does not get synced
-    raise NextAttempt([])
 
 
 def _parse_virtual_chassis(
