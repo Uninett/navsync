@@ -448,7 +448,6 @@ def _parse_virtual_chassis(
         tags=["navsync"],
         tenant=navinfo.tenant_id,
         devices=devices,
-        description=virtual_chassis.description,
     )
 
 
