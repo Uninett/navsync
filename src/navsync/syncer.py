@@ -538,8 +538,6 @@ class Syncer:
 
         upstream_device.tags = tag_ids
         upstream_device.status = "active"
-        if not upstream_device.description and device.description:
-            upstream_device.description = device.description
         upstream_device.site = upstream_site.id
         if upstream_location:
             upstream_device.location = upstream_location.id
