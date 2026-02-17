@@ -352,10 +352,11 @@ def _try_parse_standard_virtual_router(navbox: NavBox, navinfo: NavServerInfo):
 def _try_parse_proprietary_mib(navbox: NavBox, navinfo: NavServerInfo):
     """
     Checks if navbox
+    - can possibly be a virtual chassis based on its category
     - has incomplete data based on a propietary MIB instead of EntityMIB
 
     If so, cancels the sync for the given navbox, because the data is not sufficient to
-    parse it properly.
+    decide if the netbox represents a single physical device or a virtual chassis.
 
     Currently this does not attempt to parse any navboxes based on propietary MIB data.
     Hopefully this will be changed in the future.
