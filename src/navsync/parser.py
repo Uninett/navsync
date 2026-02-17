@@ -249,16 +249,15 @@ def _try_parse_standard_virtual_chassis(
     if len(physical_chassises) == 1:
         _logger.warning(
             f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
-            f"physicall chassis"
+            f"physical chassis. Cannot parse as virtual chassis."
         )
         raise NextAttempt
     if len(physical_chassises) == 0:
         _logger.warning(
             f"Navbox {navbox.sysname} looks like a virtual chassis, but with 0 "
-            f"physicall chassis"
+            f"physical chassis. Cannot parse as virtual chassis."
         )
         raise NextAttempt
-
 
     sub_stacks = [
         e
@@ -315,7 +314,9 @@ def _try_parse_juniper_virtual_chassis(
         raise NextAttempt
 
     if len(chassises) > 1:
-        _logger.warning(f"Navbox {navbox.sysname} has multiple chassis entities")
+        _logger.warning(
+            f"Navbox {navbox.sysname} has multiple chassis entities. Cannot parse as juniper virtual chassis."
+        )
         raise NextAttempt
 
     physical_chassises = [
@@ -324,21 +325,23 @@ def _try_parse_juniper_virtual_chassis(
         if e.physical_class == IANAPhysicalClass.CONTAINER
     ]
     if len(physical_chassises) == 0:
-        _logger.warning(f"Failed to find physical chassis for Navbox {navbox.sysname}")
+        _logger.warning(
+            f"Failed to find physical chassis for Navbox {navbox.sysname}. Cannot parse as juniper virtual chassis."
+        )
         raise NextAttempt
 
     if not any(
         e.serial_number == virtual_chassis.serial_number for e in physical_chassises
     ):
         _logger.warning(
-            f"Failed to find matching serial number between virtual chassis and one of its physical chassis in Navbox {navbox.sysname}"
+            f"Failed to find matching serial number between virtual chassis and one of its physical chassis in Navbox {navbox.sysname}. Cannot parse as juniper virtual chassis."
         )
         raise NextAttempt
 
     if len(physical_chassises) == 1:
         _logger.warning(
             f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
-            f"physicall chassis"
+            f"physical chassis. Cannot parse as juniper virtual chassis."
         )
         raise NextAttempt
 
