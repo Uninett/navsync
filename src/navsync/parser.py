@@ -382,7 +382,7 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
 
 
 def _parse_priopietary_mib_chassis(navbox: NavBox, chassis: NavBoxEntity):
-    _logger.warning(
+    _logger.error(
         f"Navbox {navbox.sysname} has propietary mib data, which is not enough for "
         f"Navsync to decide whether it is a virtual chassis or not, and thus won't be "
         f"synced."
