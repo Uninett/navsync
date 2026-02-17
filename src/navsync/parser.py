@@ -387,6 +387,7 @@ def _parse_priopietary_mib_chassis(navbox: NavBox, chassis: NavBoxEntity):
         f"Navsync to decide whether it is a virtual chassis or not, and thus won't be "
         f"synced."
     )
+    # This will cancel all subsequent attempts, ensuring it does not get synced
     raise NextAttempt([])
 
 
