@@ -141,7 +141,11 @@ class Syncer:
         chassis, devices = self._get_virtual_chassis_and_devices()
         locations = get_locations_from_devices(devices.values())
         sites = get_sites_from_locations(locations)
-        assets = {device.name: device.asset for device in devices.values()}
+        assets = {
+            device.name: device.asset
+            for device in devices.values()
+            if device.asset is not None
+        }
 
         self.tags = self._get_or_create_tags(
             sites + locations + list(devices.values()) + list(assets.values())
