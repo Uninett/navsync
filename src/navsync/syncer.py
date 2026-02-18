@@ -210,7 +210,8 @@ class Syncer:
         for upstream_name, upstream_vc in upstream_chassis.items():
             if upstream_name in chassis:
                 continue
-            if "navsync" not in [tag.name for tag in upstream_vc.tags]:
+            tags = [tag.name for tag in upstream_vc.tags]
+            if "navsync" not in tags or "cnaas" not in tags:
                 continue
             try:
                 self._unregister_devices_as_members_of_vc(upstream_vc, upstream_devices)
@@ -392,7 +393,8 @@ class Syncer:
         for upstream_serial, upstream_asset in upstream_assets_by_serial.items():
             if upstream_serial in assets_by_serial:
                 continue
-            if "navsync" not in [tag.name for tag in upstream_asset.tags]:
+            tags = [tag.name for tag in upstream_asset.tags]
+            if "navsync" not in tags or "cnaas" not in tags:
                 continue
             if upstream_asset.status != "used":
                 continue
@@ -472,7 +474,8 @@ class Syncer:
         for upstream_device in upstream_devices:
             if upstream_device.name in devices:
                 continue
-            if "navsync" not in [tag.name for tag in upstream_device.tags]:
+            tags = [tag.name for tag in upstream_device.tags]
+            if "navsync" not in tags or "cnaas" not in tags:
                 continue
             if upstream_device.status.value != "active":
                 continue
