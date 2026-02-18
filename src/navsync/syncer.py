@@ -533,21 +533,21 @@ class Syncer:
         upstream_device_role: Record,
         upstream_location: Optional[Record] = None,
     ):
-        tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
-        upstream_device.tenant = device.tenant
+        if "cnaas" in [upstream_tag.name for upstream_tag in upstream_device.tags]:
+            upstream_device.site = upstream_site.id
+            if upstream_location:
+                upstream_device.location = upstream_location.id
 
+        tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
         upstream_device_tag_ids = self._get_tag_ids_from_tags(upstream_device.tags)
         tag_ids += [
             tag_id for tag_id in upstream_device_tag_ids if tag_id not in tag_ids
         ]
-
         upstream_device.tags = tag_ids
-        upstream_device.status = "active"
-        upstream_device.site = upstream_site.id
-        if upstream_location:
-            upstream_device.location = upstream_location.id
-        upstream_device.role = upstream_device_role.id
 
+        upstream_device.role = upstream_device_role.id
+        upstream_device.status = "active"
+        upstream_device.tenant = device.tenant
         try:
             upstream_device_type = self.get_or_create_device_type(device)
         except (RequestError, ValueError) as e:
