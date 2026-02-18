@@ -247,7 +247,9 @@ class Syncer:
     def _create_virtual_chassis(
         self, virtual_chassis: VirtualChassis, upstream_devices: dict[NameStr, Record]
     ):
-        tag_ids = self._convert_tag_names_to_ids(virtual_chassis.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(
+            virtual_chassis.tags + ["cnaas"], self.tags
+        )
         new_virtual_chassis = {
             "name": virtual_chassis.name,
             "tenant": virtual_chassis.tenant,
@@ -335,7 +337,7 @@ class Syncer:
                 self._create_asset(asset, upstream_device)
 
     def _create_asset(self, asset: Asset, upstream_device: Record):
-        tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(asset.tags + ["cnaas"], self.tags)
         new_asset_dict = {
             "serial": asset.serial,
             "status": asset.status,
@@ -502,7 +504,7 @@ class Syncer:
             )
             return
 
-        tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(device.tags + ["cnaas"], self.tags)
         new_device_dict = {
             "name": device.name,
             "device_type": upstream_device_type.id,
@@ -629,7 +631,7 @@ class Syncer:
                 self._create_location(location, upstream_site)
 
     def _create_location(self, location: Location, upstream_site: Record):
-        tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(location.tags + ["cnaas"], self.tags)
         new_location_dict = {
             "site": upstream_site.id,
             "name": location.name,
@@ -722,7 +724,7 @@ class Syncer:
                 _logger.error(f"Failed to update site {upstream_site.name}: {str(e)}")
 
     def _create_site(self, site: Site):
-        tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(site.tags + ["cnaas"], self.tags)
         new_site_dict = {
             "tenant": site.tenant,
             "status": site.status,
