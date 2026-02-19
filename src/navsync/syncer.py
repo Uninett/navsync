@@ -215,7 +215,10 @@ class Syncer:
             tags = [tag.name for tag in upstream_vc.tags]
             if "navsync" not in tags or "cnaas" not in tags:
                 continue
-            if upstream_vc.role and upstream_vc.role.slug == "verktykassecnaas":
+            if (
+                hasattr(upstream_vc, "role")
+                and upstream_vc.role.slug == "verktykassecnaas"
+            ):
                 continue
             try:
                 self._unregister_devices_as_members_of_vc(upstream_vc, upstream_devices)
