@@ -370,7 +370,6 @@ class Syncer:
         self, asset: Asset, upstream_asset: Record, upstream_device: Record
     ):
         upstream_asset.device = upstream_device.id
-        upstream_asset.device_type = upstream_device.device_type.id
         upstream_asset.owner = asset.owner
         upstream_asset.tenant = asset.tenant
         upstream_asset.status = asset.status
