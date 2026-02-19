@@ -210,7 +210,8 @@ class Syncer:
         for upstream_name, upstream_vc in upstream_chassis.items():
             if upstream_name in chassis:
                 continue
-            if "navsync" not in [tag.name for tag in upstream_vc.tags]:
+            tags = [tag.name for tag in upstream_vc.tags]
+            if "navsync" not in tags or "cnaas" not in tags:
                 continue
             try:
                 self._unregister_devices_as_members_of_vc(upstream_vc, upstream_devices)
@@ -247,7 +248,9 @@ class Syncer:
     def _create_virtual_chassis(
         self, virtual_chassis: VirtualChassis, upstream_devices: dict[NameStr, Record]
     ):
-        tag_ids = self._convert_tag_names_to_ids(virtual_chassis.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(
+            virtual_chassis.tags + ["cnaas"], self.tags
+        )
         new_virtual_chassis = {
             "name": virtual_chassis.name,
             "tenant": virtual_chassis.tenant,
@@ -335,7 +338,7 @@ class Syncer:
                 self._create_asset(asset, upstream_device)
 
     def _create_asset(self, asset: Asset, upstream_device: Record):
-        tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(asset.tags + ["cnaas"], self.tags)
         new_asset_dict = {
             "serial": asset.serial,
             "status": asset.status,
@@ -390,7 +393,8 @@ class Syncer:
         for upstream_serial, upstream_asset in upstream_assets_by_serial.items():
             if upstream_serial in assets_by_serial:
                 continue
-            if "navsync" not in [tag.name for tag in upstream_asset.tags]:
+            tags = [tag.name for tag in upstream_asset.tags]
+            if "navsync" not in tags or "cnaas" not in tags:
                 continue
             if upstream_asset.status != "used":
                 continue
@@ -470,7 +474,8 @@ class Syncer:
         for upstream_device in upstream_devices:
             if upstream_device.name in devices:
                 continue
-            if "navsync" not in [tag.name for tag in upstream_device.tags]:
+            tags = [tag.name for tag in upstream_device.tags]
+            if "navsync" not in tags or "cnaas" not in tags:
                 continue
             if upstream_device.status.value != "active":
                 continue
@@ -502,7 +507,7 @@ class Syncer:
             )
             return
 
-        tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(device.tags + ["cnaas"], self.tags)
         new_device_dict = {
             "name": device.name,
             "device_type": upstream_device_type.id,
@@ -528,21 +533,21 @@ class Syncer:
         upstream_device_role: Record,
         upstream_location: Optional[Record] = None,
     ):
-        tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
-        upstream_device.tenant = device.tenant
+        if "cnaas" in [upstream_tag.name for upstream_tag in upstream_device.tags]:
+            upstream_device.site = upstream_site.id
+            if upstream_location:
+                upstream_device.location = upstream_location.id
 
+        tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
         upstream_device_tag_ids = self._get_tag_ids_from_tags(upstream_device.tags)
         tag_ids += [
             tag_id for tag_id in upstream_device_tag_ids if tag_id not in tag_ids
         ]
-
         upstream_device.tags = tag_ids
-        upstream_device.status = "active"
-        upstream_device.site = upstream_site.id
-        if upstream_location:
-            upstream_device.location = upstream_location.id
-        upstream_device.role = upstream_device_role.id
 
+        upstream_device.role = upstream_device_role.id
+        upstream_device.status = "active"
+        upstream_device.tenant = device.tenant
         try:
             upstream_device_type = self.get_or_create_device_type(device)
         except (RequestError, ValueError) as e:
@@ -629,7 +634,7 @@ class Syncer:
                 self._create_location(location, upstream_site)
 
     def _create_location(self, location: Location, upstream_site: Record):
-        tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(location.tags + ["cnaas"], self.tags)
         new_location_dict = {
             "site": upstream_site.id,
             "name": location.name,
@@ -722,7 +727,7 @@ class Syncer:
                 _logger.error(f"Failed to update site {upstream_site.name}: {str(e)}")
 
     def _create_site(self, site: Site):
-        tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
+        tag_ids = self._convert_tag_names_to_ids(site.tags + ["cnaas"], self.tags)
         new_site_dict = {
             "tenant": site.tenant,
             "status": site.status,
