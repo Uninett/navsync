@@ -61,8 +61,8 @@ class Asset:
     owner: int
     manufacturer: ManufacturerStr
     model: ModelStr
+    serial: SerialStr
     status: Literal["stored", "used", "retired"] = "used"
-    serial: SerialStr | None = None
     contact: int | str | None = None
     navbox: NavBox | None = None
 
@@ -523,10 +523,11 @@ def _parse_asset(navbox: NavBox, entity: NavBoxEntity, navinfo: NavServerInfo) -
     )
     if not model or not manufacturer:
         raise ValueError("Missing model or manufacturer")
+    serial = entity.serial_number.upper() if entity.serial_number is not None else None
+    if serial is None:
+        raise ValueError("Missing serial number for asset")
     return Asset(
-        serial=entity.serial_number.upper()
-        if entity.serial_number is not None
-        else None,
+        serial=serial,
         tags=["navsync"],
         manufacturer=manufacturer,
         model=model,

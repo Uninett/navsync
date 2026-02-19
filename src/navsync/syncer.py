@@ -320,8 +320,6 @@ class Syncer:
         self._shelve_all_missing_assets(upstream_assets, assets.values())
 
         for device_name, asset in assets.items():
-            if not asset.serial:
-                continue
             upstream_device = upstream_devices_by_name.get(device_name)
             if upstream_device is None:
                 _logger.error(
