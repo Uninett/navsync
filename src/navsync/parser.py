@@ -386,26 +386,26 @@ def _try_parse_proprietary_mib(navbox: NavBox, navinfo: NavServerInfo):
 
 
 def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Device:
-    if not navbox.entities:
-        _logger.warning(
-            f"Failed to find entities for Navbox {navbox.sysname}. Cannot parse as physical chassis."
-        )
-        raise NextAttempt
-    physical_chassises = [
-        e for e in navbox.entities if e.physical_class == IANAPhysicalClass.CHASSIS
-    ]
-    if len(physical_chassises) > 1:
-        _logger.warning(
-            f"Found multiple physical chassis entities for Navbox {navbox.sysname}. Cannot parse as physical chassis."
-        )
-        raise NextAttempt
-    if len(physical_chassises) == 0:
-        _logger.warning(
-            f"Failed to find physical chassis for Navbox {navbox.sysname}. Will not be able to register asset for this device."
-        )
-        chassis = None
+    chassis = None
+    if navbox.entities:
+        physical_chassises = [
+            e for e in navbox.entities if e.physical_class == IANAPhysicalClass.CHASSIS
+        ]
+        if len(physical_chassises) > 1:
+            _logger.warning(
+                f"Found multiple physical chassis entities for Navbox {navbox.sysname}. Cannot parse as physical chassis."
+            )
+            raise NextAttempt
+        elif len(physical_chassises) == 0:
+            _logger.warning(
+                f"Failed to find physical chassis for Navbox {navbox.sysname}. Syncing without asset.."
+            )
+        else:
+            chassis = physical_chassises[0]
     else:
-        chassis = physical_chassises[0]
+        _logger.warning(
+            f"Failed to find entities for Navbox {navbox.sysname}. Syncing without asset."
+        )
     device = _parse_device(
         navbox,
         navinfo,
