@@ -217,6 +217,8 @@ class Syncer:
             tags = [tag.name for tag in upstream_vc.tags]
             if "navsync" not in tags or "cnaas" not in tags:
                 continue
+            if upstream_vc.role and upstream_vc.role.slug == "verktykassecnaas":
+                continue
             try:
                 self._unregister_devices_as_members_of_vc(upstream_vc, upstream_devices)
             except RequestError as e:
@@ -480,6 +482,8 @@ class Syncer:
                 continue
             tags = [tag.name for tag in upstream_device.tags]
             if "navsync" not in tags or "cnaas" not in tags:
+                continue
+            if upstream_device.role and upstream_device.role.slug == "verktykassecnaas":
                 continue
             if upstream_device.status.value != "active":
                 continue
