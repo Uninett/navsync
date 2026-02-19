@@ -996,6 +996,11 @@ class Syncer:
             role="verktykassecnaas", status="active"
         )
         for vm in virtual_machines:
+            if not vm.tags or "navsync" not in [tag.name for tag in vm.tags]:
+                _logger.debug(
+                    f"VM {vm.name} is missing tag 'navsync'. This means it should not be synced. Skipping."
+                )
+                continue
             if "owner" not in vm.custom_fields:
                 _logger.error(
                     f"VM {vm.name} is missing custom field 'owner'. Cannot determine NAV server owner. Skipping."
@@ -1014,6 +1019,11 @@ class Syncer:
             )
 
         for device in devices:
+            if not device.tags or "navsync" not in [tag.name for tag in device.tags]:
+                _logger.debug(
+                    f"Device {device.name} is missing tag 'navsync'. This means it should not be synced. Skipping."
+                )
+                continue
             asset = self.netbox_api.plugins.inventory.assets.get(device=device)
             if not asset:
                 _logger.error(
