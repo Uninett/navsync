@@ -74,9 +74,9 @@ class Device:
     name: str
     tags: list[str]
     tenant: int
-    asset: Asset
     location: Location
     role: Literal["router", "switch", "unknown", "PDU"]
+    asset: Asset | None = None
     manufacturer: ManufacturerStr | None = None
     model: ModelStr | None = None
     vc_position: int | None = None
@@ -394,17 +394,18 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
     physical_chassises = [
         e for e in navbox.entities if e.physical_class == IANAPhysicalClass.CHASSIS
     ]
-    if len(physical_chassises) == 0:
-        _logger.warning(
-            f"Failed to find physical chassis for Navbox {navbox.sysname}. Cannot parse as physical chassis."
-        )
-        raise NextAttempt
-    elif len(physical_chassises) > 1:
+    if len(physical_chassises) > 1:
         _logger.warning(
             f"Found multiple physical chassis entities for Navbox {navbox.sysname}. Cannot parse as physical chassis."
         )
         raise NextAttempt
-    chassis = physical_chassises[0]
+    if len(physical_chassises) == 0:
+        _logger.warning(
+            f"Failed to find physical chassis for Navbox {navbox.sysname}. Will not be able to register asset for this device."
+        )
+        chassis = None
+    else:
+        chassis = physical_chassises[0]
     device = _parse_device(
         navbox,
         navinfo,
@@ -455,14 +456,17 @@ def _parse_virtual_chassis(
 def _parse_device(
     navbox: NavBox,
     navinfo: NavServerInfo,
-    physical_chassis: NavBoxEntity,
+    physical_chassis: Optional[NavBoxEntity] = None,
     position: Optional[int] = None,
 ) -> Device:
     if position is not None:
         sysname = f"{navbox.sysname}-{position}"
     else:
         sysname = navbox.sysname
-
+    if physical_chassis:
+        asset = _parse_asset(navbox, physical_chassis, navinfo)
+    else:
+        asset = None
     return Device(
         name=sysname,
         tags=["navsync"],
@@ -471,7 +475,7 @@ def _parse_device(
         if navbox.type_vendor is not None
         else None,
         model=navbox.type_name.upper() if navbox.type_name is not None else None,
-        asset=_parse_asset(navbox, physical_chassis, navinfo),
+        asset=asset,
         location=_parse_location(navbox, navinfo),
         role=_get_device_role_from_navbox(navbox),
         vc_position=position,
