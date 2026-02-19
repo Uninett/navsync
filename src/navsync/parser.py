@@ -75,10 +75,12 @@ class Device:
     tags: list[str]
     tenant: int
     location: Location
-    role: Literal["router", "switch", "unknown", "PDU"]
+    role: Literal[
+        "router", "switch", "unknown", "PDU", "server", "Uninett Environmental"
+    ]
+    manufacturer: ManufacturerStr
+    model: ModelStr
     asset: Asset | None = None
-    manufacturer: ManufacturerStr | None = None
-    model: ModelStr | None = None
     vc_position: int | None = None
     navbox: NavBox | None = None
 
@@ -398,7 +400,7 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
             raise NextAttempt
         elif len(physical_chassises) == 0:
             _logger.warning(
-                f"Failed to find physical chassis for Navbox {navbox.sysname}. Syncing without asset.."
+                f"Failed to find physical chassis for Navbox {navbox.sysname}. Syncing without asset."
             )
         else:
             chassis = physical_chassises[0]
@@ -406,11 +408,17 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
         _logger.warning(
             f"Failed to find entities for Navbox {navbox.sysname}. Syncing without asset."
         )
-    device = _parse_device(
-        navbox,
-        navinfo,
-        chassis,
-    )
+    try:
+        device = _parse_device(
+            navbox,
+            navinfo,
+            chassis,
+        )
+    except ValueError as err:
+        _logger.error(
+            f"Failed to parse Navbox {navbox.sysname} as physical chassis: {err}"
+        )
+        raise NextAttempt
     return device
 
 
@@ -437,12 +445,18 @@ def _parse_virtual_chassis(
                 "do not have an explicit position inside the virtual chassis"
             )
             raise NextAttempt
-        device = _parse_device(
-            navbox,
-            navinfo,
-            physical_chassis,
-            position=physical_chassis.parent_relpos,
-        )
+        try:
+            device = _parse_device(
+                navbox,
+                navinfo,
+                physical_chassis,
+                position=physical_chassis.parent_relpos,
+            )
+        except ValueError as err:
+            _logger.error(
+                f"Failed to parse physical chassis {physical_chassis.name} in virtual chassis {navbox.sysname} as device: {err}"
+            )
+            continue
         devices.append(device)
 
     return VirtualChassis(
@@ -467,14 +481,18 @@ def _parse_device(
         asset = _parse_asset(navbox, physical_chassis, navinfo)
     else:
         asset = None
+    model = navbox.type_name.upper() if navbox.type_name is not None else None
+    manufacturer = (
+        navbox.type_vendor.lower() if navbox.type_vendor is not None else None
+    )
+    if not model or not manufacturer:
+        raise ValueError("Missing model or manufacturer")
     return Device(
         name=sysname,
         tags=["navsync"],
         tenant=navinfo.tenant_id,
-        manufacturer=navbox.type_vendor.lower()
-        if navbox.type_vendor is not None
-        else None,
-        model=navbox.type_name.upper() if navbox.type_name is not None else None,
+        manufacturer=manufacturer,
+        model=model,
         asset=asset,
         location=_parse_location(navbox, navinfo),
         role=_get_device_role_from_navbox(navbox),
