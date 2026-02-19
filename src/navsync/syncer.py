@@ -150,9 +150,7 @@ class Syncer:
         self.tags = self._get_or_create_tags(
             sites + locations + list(devices.values()) + list(assets.values())
         )
-        self.upstream_device_types_by_part_number = (
-            self._get_upstream_device_types_by_part_number()
-        )
+        self.upstream_device_types = self._get_upstream_device_types()
         self.upstream_device_types_by_slug = self._get_upstream_device_types_by_slug()
         self.upstream_manufacturers_by_slug = self._get_upstream_manufacturers()
         self.tenants = self._get_upstream_tenants()
@@ -578,9 +576,9 @@ class Syncer:
         return {m.slug: m for m in upstream_manufacturers}
 
     def get_or_create_device_type(self, device: Device):
-        upstream_device_type = self.upstream_device_types_by_part_number.get(
-            device.model
-        )
+        upstream_device_type = self.upstream_device_types.get(
+            device.manufacturer, {}
+        ).get(device.model)
         if not upstream_device_type:
             if device.model is None or device.manufacturer is None:
                 raise ValueError(
@@ -801,12 +799,16 @@ class Syncer:
         """Returns dict mapping name to tenant"""
         return {tenant.name: tenant for tenant in self.netbox_api.tenancy.tenants.all()}
 
-    def _get_upstream_device_types_by_part_number(self) -> dict[str, Record]:
-        """Returns dict mapping part number to device type"""
-        return {
-            device_type.part_number: device_type
-            for device_type in self.netbox_api.dcim.device_types.all()
-        }
+    def _get_upstream_device_types(self) -> dict[NameStr, dict[str, Record]]:
+        """Returns dict mapping manufacturer to part numbers and device types"""
+        device_types = {}
+        for device_type in self.netbox_api.dcim.device_types.all():
+            if device_type.manufacturer.name not in device_types:
+                device_types[device_type.manufacturer.name] = {}
+            device_types[device_type.manufacturer.name][device_type.part_number] = (
+                device_type
+            )
+        return device_types
 
     def _get_upstream_device_types_by_slug(self) -> dict[str, Record]:
         """Returns dict mapping slug to device type"""
