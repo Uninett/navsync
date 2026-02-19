@@ -59,10 +59,10 @@ class Asset:
     tags: list[str]
     tenant: int
     owner: int
+    manufacturer: ManufacturerStr
+    model: ModelStr
     status: Literal["stored", "used", "retired"] = "used"
     serial: SerialStr | None = None
-    manufacturer: ManufacturerStr | None = None
-    model: ModelStr | None = None
     contact: int | str | None = None
     navbox: NavBox | None = None
 
@@ -517,15 +517,19 @@ def _get_device_role_from_navbox(navbox: NavBox) -> str:
 
 
 def _parse_asset(navbox: NavBox, entity: NavBoxEntity, navinfo: NavServerInfo) -> Asset:
+    model = navbox.type_name.upper() if navbox.type_name is not None else None
+    manufacturer = (
+        navbox.type_vendor.lower() if navbox.type_vendor is not None else None
+    )
+    if not model or not manufacturer:
+        raise ValueError("Missing model or manufacturer")
     return Asset(
         serial=entity.serial_number.upper()
         if entity.serial_number is not None
         else None,
         tags=["navsync"],
-        manufacturer=navbox.type_vendor.lower()
-        if navbox.type_vendor is not None
-        else None,
-        model=navbox.type_name.upper() if navbox.type_name is not None else None,
+        manufacturer=manufacturer,
+        model=model,
         owner=navinfo.owner_id,
         tenant=navinfo.tenant_id,
     )
