@@ -398,7 +398,7 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
             raise NextAttempt
         elif len(physical_chassises) == 0:
             _logger.warning(
-                f"Failed to find physical chassis for Navbox {navbox.sysname}. Syncing without asset.."
+                f"Failed to find physical chassis for Navbox {navbox.sysname}. Syncing without asset."
             )
         else:
             chassis = physical_chassises[0]
