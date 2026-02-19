@@ -75,7 +75,9 @@ class Device:
     tags: list[str]
     tenant: int
     location: Location
-    role: Literal["router", "switch", "unknown", "PDU"]
+    role: Literal[
+        "router", "switch", "unknown", "PDU", "server", "Uninett Environmental"
+    ]
     manufacturer: ManufacturerStr
     model: ModelStr
     asset: Asset | None = None
