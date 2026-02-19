@@ -294,6 +294,7 @@ class Syncer:
             for tag_id in upstream_virtual_chassis_tag_ids
             if tag_id not in tag_ids
         ]
+        tag_ids.sort()
         upstream_virtual_chassis.tags = tag_ids
         if upstream_virtual_chassis.updates():
             _logger.debug(f"Updating virtual chassis {upstream_virtual_chassis.name}")
@@ -376,6 +377,7 @@ class Syncer:
         tag_ids += [
             tag_id for tag_id in upstream_asset_tag_ids if tag_id not in tag_ids
         ]
+        tag_ids.sort()
         upstream_asset.tags = tag_ids
         if upstream_asset.updates():
             # There is a problem where netbox sometimes returns a 500 error
@@ -549,6 +551,7 @@ class Syncer:
         tag_ids += [
             tag_id for tag_id in upstream_device_tag_ids if tag_id not in tag_ids
         ]
+        tag_ids.sort()
         upstream_device.tags = tag_ids
 
         upstream_device.role = upstream_device_role.id
@@ -659,6 +662,7 @@ class Syncer:
         tag_ids += [
             tag_id for tag_id in upstream_location_tag_ids if tag_id not in tag_ids
         ]
+        tag_ids.sort()
 
         upstream_location.tags = tag_ids
         upstream_location.status = location.status
@@ -709,6 +713,7 @@ class Syncer:
         tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
         upstream_site_tag_ids = self._get_tag_ids_from_tags(upstream_site.tags)
         tag_ids += [tag_id for tag_id in upstream_site_tag_ids if tag_id not in tag_ids]
+        tag_ids.sort()
 
         upstream_site.tags = tag_ids
         upstream_site.status = site.status
