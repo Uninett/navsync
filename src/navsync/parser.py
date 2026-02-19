@@ -415,7 +415,7 @@ def _try_parse_physical_chassis(navbox: NavBox, navinfo: NavServerInfo) -> Devic
             chassis,
         )
     except ValueError as err:
-        _logger.error(
+        _logger.warning(
             f"Failed to parse Navbox {navbox.sysname} as physical chassis: {err}"
         )
         raise NextAttempt
@@ -453,7 +453,7 @@ def _parse_virtual_chassis(
                 position=physical_chassis.parent_relpos,
             )
         except ValueError as err:
-            _logger.error(
+            _logger.warning(
                 f"Failed to parse physical chassis {physical_chassis.name} in virtual chassis {navbox.sysname} as device: {err}"
             )
             continue
