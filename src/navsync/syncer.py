@@ -580,10 +580,6 @@ class Syncer:
             device.manufacturer, {}
         ).get(device.model)
         if not upstream_device_type:
-            if device.model is None or device.manufacturer is None:
-                raise ValueError(
-                    f"Device {device.name} is missing model or manufacturer information. Cannot create device type for it."
-                )
             upstream_manufacturer = self.get_or_create_manifacturer(device)
             device_type_slug = sanitize_slug(
                 f"{upstream_manufacturer.name} {device.model}"
