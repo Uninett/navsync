@@ -18,6 +18,7 @@ from navsync.parser import (
     NameStr,
     SerialStr,
     Site,
+    SlugStr,
     VirtualChassis,
     get_locations_from_devices,
     get_netbox_entities,
@@ -151,8 +152,7 @@ class Syncer:
             sites + locations + list(devices.values()) + list(assets.values())
         )
         self.upstream_device_types = self._get_upstream_device_types()
-        self.upstream_device_types_by_slug = self._get_upstream_device_types_by_slug()
-        self.upstream_manufacturers_by_slug = self._get_upstream_manufacturers()
+        self.upstream_manufacturers = self._get_upstream_manufacturers()
         self.tenants = self._get_upstream_tenants()
 
         self._sync_sites(sites)
@@ -570,49 +570,40 @@ class Syncer:
             except RequestError as e:
                 _logger.error(f"Failed to update device {device.name}: {str(e)}")
 
-    def _get_upstream_manufacturers(self) -> dict[str, Record]:
+    def _get_upstream_manufacturers(self) -> dict[SlugStr, Record]:
         """Maps slug to manufacturer Record"""
         upstream_manufacturers = self.netbox_api.dcim.manufacturers.all()
         return {m.slug: m for m in upstream_manufacturers}
 
     def get_or_create_device_type(self, device: Device):
         upstream_device_type = self.upstream_device_types.get(
-            device.manufacturer, {}
+            sanitize_slug(device.manufacturer), {}
         ).get(device.model)
         if not upstream_device_type:
-            upstream_manufacturer = self.get_or_create_manifacturer(device)
-            device_type_slug = sanitize_slug(
-                f"{upstream_manufacturer.name} {device.model}"
+            upstream_manufacturer = self.get_or_create_manifacturer(device.manufacturer)
+            upstream_device_type = self.netbox_api.dcim.device_types.create(
+                manufacturer=upstream_manufacturer.id,
+                model=device.model,
+                part_number=device.model,
+                slug=sanitize_slug(f"{device.manufacturer}-{device.model}"),
             )
-            upstream_device_type = self.upstream_device_types_by_slug.get(
-                device_type_slug
-            )
-            if not upstream_device_type:
-                upstream_device_type = self.netbox_api.dcim.device_types.create(
-                    manufacturer=upstream_manufacturer.id,
-                    model=device.model,
-                    part_number=device.model,
-                    slug=device_type_slug,
-                )
-                self.upstream_device_types_by_part_number[
-                    upstream_device_type.part_number
-                ] = upstream_device_type
-                self.upstream_device_types_by_slug[upstream_device_type.slug] = (
-                    upstream_device_type
-                )
+            if upstream_manufacturer.slug not in self.upstream_device_types:
+                self.upstream_device_types[upstream_manufacturer.slug] = {}
+            self.upstream_device_types[upstream_manufacturer.slug][
+                upstream_device_type.part_number
+            ] = upstream_device_type
+
         return upstream_device_type
 
-    def get_or_create_manifacturer(self, device: Device) -> Record:
-        manufacturer_slug = sanitize_slug(device.manufacturer)
-        upstream_manufacturer = self.upstream_manufacturers_by_slug.get(
-            manufacturer_slug
-        )
+    def get_or_create_manifacturer(self, name: str) -> Record:
+        manufacturer_slug = sanitize_slug(name)
+        upstream_manufacturer = self.upstream_manufacturers.get(manufacturer_slug)
         if not upstream_manufacturer:
             upstream_manufacturer = self.netbox_api.dcim.manufacturers.create(
-                name=device.manufacturer,
+                name=name,
                 slug=manufacturer_slug,
             )
-            self.upstream_manufacturers_by_slug[upstream_manufacturer.slug] = (
+            self.upstream_manufacturers[upstream_manufacturer.slug] = (
                 upstream_manufacturer
             )
         return upstream_manufacturer
@@ -795,23 +786,16 @@ class Syncer:
         """Returns dict mapping name to tenant"""
         return {tenant.name: tenant for tenant in self.netbox_api.tenancy.tenants.all()}
 
-    def _get_upstream_device_types(self) -> dict[NameStr, dict[str, Record]]:
-        """Returns dict mapping manufacturer to part numbers and device types"""
+    def _get_upstream_device_types(self) -> dict[SlugStr, dict[str, Record]]:
+        """Returns dict mapping manufacturer slug to part numbers and device types"""
         device_types = {}
         for device_type in self.netbox_api.dcim.device_types.all():
-            if device_type.manufacturer.name not in device_types:
-                device_types[device_type.manufacturer.name] = {}
-            device_types[device_type.manufacturer.name][device_type.part_number] = (
+            if device_type.manufacturer.slug not in device_types:
+                device_types[device_type.manufacturer.slug] = {}
+            device_types[device_type.manufacturer.slug][device_type.part_number] = (
                 device_type
             )
         return device_types
-
-    def _get_upstream_device_types_by_slug(self) -> dict[str, Record]:
-        """Returns dict mapping slug to device type"""
-        return {
-            device_type.slug: device_type
-            for device_type in self.netbox_api.dcim.device_types.all()
-        }
 
     def _get_upstream_device_roles(self) -> dict[NameStr, Record]:
         """Returns dict mapping name to device role"""
