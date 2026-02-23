@@ -151,7 +151,10 @@ class Syncer:
         self.tags = self._get_or_create_tags(
             sites + locations + list(devices.values()) + list(assets.values())
         )
-        self.upstream_device_types = self._get_upstream_device_types()
+        self.upstream_device_types_by_part_number = (
+            self._get_upstream_device_types_by_part_number()
+        )
+        self.upstream_device_types_by_model = self._get_upstream_device_types_by_model()
         self.upstream_manufacturers = self._get_upstream_manufacturers()
         self.tenants = self._get_upstream_tenants()
 
@@ -607,9 +610,21 @@ class Syncer:
                 part_number=device.model,
                 slug=sanitize_slug(f"{device.manufacturer}-{device.model}"),
             )
-            if upstream_manufacturer.slug not in self.upstream_device_types:
-                self.upstream_device_types[upstream_manufacturer.slug] = {}
-            self.upstream_device_types[upstream_manufacturer.slug][
+
+            # Update local dicts so it stays synced with netbox without needing to fetch again
+            if upstream_manufacturer.slug not in self.upstream_device_types_by_model:
+                self.upstream_device_types_by_model[upstream_manufacturer.slug] = {}
+            self.upstream_device_types_by_model[upstream_manufacturer.slug][
+                upstream_device_type.model
+            ] = upstream_device_type
+            if (
+                upstream_manufacturer.slug
+                not in self.upstream_device_types_by_part_number
+            ):
+                self.upstream_device_types_by_part_number[
+                    upstream_manufacturer.slug
+                ] = {}
+            self.upstream_device_types_by_part_number[upstream_manufacturer.slug][
                 upstream_device_type.part_number
             ] = upstream_device_type
 
@@ -812,7 +827,9 @@ class Syncer:
         """Returns dict mapping name to tenant"""
         return {tenant.name: tenant for tenant in self.netbox_api.tenancy.tenants.all()}
 
-    def _get_upstream_device_types(self) -> dict[SlugStr, dict[str, Record]]:
+    def _get_upstream_device_types_by_part_number(
+        self,
+    ) -> dict[SlugStr, dict[str, Record]]:
         """Returns dict mapping manufacturer slug to part numbers and device types"""
         device_types = {}
         for device_type in self.netbox_api.dcim.device_types.all():
@@ -821,6 +838,15 @@ class Syncer:
             device_types[device_type.manufacturer.slug][device_type.part_number] = (
                 device_type
             )
+        return device_types
+
+    def _get_upstream_device_types_by_model(self) -> dict[SlugStr, dict[str, Record]]:
+        """Returns dict mapping manufacturer slug to models and device types"""
+        device_types = {}
+        for device_type in self.netbox_api.dcim.device_types.all():
+            if device_type.manufacturer.slug not in device_types:
+                device_types[device_type.manufacturer.slug] = {}
+            device_types[device_type.manufacturer.slug][device_type.model] = device_type
         return device_types
 
     def _get_upstream_device_roles(self) -> dict[NameStr, Record]:
@@ -1076,10 +1102,25 @@ class Syncer:
                 tag_ids.append(tag_id)
         return tag_ids
 
-    def _get_device_type(self, manufacturer: str, part_number: str) -> Optional[Record]:
-        return self.upstream_device_types.get(sanitize_slug(manufacturer), {}).get(
-            part_number
-        )
+    def _get_device_type(self, manufacturer: str, model: str) -> Optional[Record]:
+        device_type = self._get_device_type_by_part_number(manufacturer, model)
+        if device_type:
+            return device_type
+        return self._get_device_type_by_model(manufacturer, model)
+
+    def _get_device_type_by_part_number(
+        self, manufacturer: str, part_number: str
+    ) -> Optional[Record]:
+        return self.upstream_device_types_by_part_number.get(
+            sanitize_slug(manufacturer), {}
+        ).get(part_number)
+
+    def _get_device_type_by_model(
+        self, manufacturer: str, model: str
+    ) -> Optional[Record]:
+        return self.upstream_device_types_by_model.get(
+            sanitize_slug(manufacturer), {}
+        ).get(model)
 
 
 if __name__ == "__main__":
