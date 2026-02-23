@@ -405,7 +405,9 @@ class Syncer:
         """Shelve any upstream assets that were registered by navsync but were not found in the current sync"""
         new_assets_by_device_type_and_serial = {}
         for new_asset in new_assets:
-            device_type = self._get_device_type(new_asset.manufacturer, new_asset.model)
+            device_type = self.get_or_create_device_type(
+                new_asset.manufacturer, new_asset.model
+            )
             if device_type.id not in new_assets_by_device_type_and_serial:
                 new_assets_by_device_type_and_serial[device_type.id] = {}
             new_assets_by_device_type_and_serial[device_type.id][new_asset.serial] = (
@@ -530,7 +532,9 @@ class Syncer:
         upstream_location: Optional[Record] = None,
     ):
         try:
-            upstream_device_type = self.get_or_create_device_type(device)
+            upstream_device_type = self.get_or_create_device_type(
+                device.manufacturer, device.model
+            )
         except (RequestError, ValueError) as e:
             _logger.error(
                 f"Got error while getting or creating device type for model {device.model}: {str(e)}. Skipping device {device.name}"
@@ -580,7 +584,9 @@ class Syncer:
         upstream_device.status = "active"
         upstream_device.tenant = device.tenant
         try:
-            upstream_device_type = self.get_or_create_device_type(device)
+            upstream_device_type = self.get_or_create_device_type(
+                device.manufacturer, device.model
+            )
         except (RequestError, ValueError) as e:
             _logger.error(
                 f"Got error while getting or creating device type for model {device.model}: {str(e)}. Not updating device type for device {device.name}."
@@ -600,15 +606,15 @@ class Syncer:
         upstream_manufacturers = self.netbox_api.dcim.manufacturers.all()
         return {m.slug: m for m in upstream_manufacturers}
 
-    def get_or_create_device_type(self, device: Device):
-        upstream_device_type = self._get_device_type(device.manufacturer, device.model)
+    def get_or_create_device_type(self, manufacturer: str, model: str) -> Record:
+        upstream_device_type = self._get_device_type(manufacturer, model)
         if not upstream_device_type:
-            upstream_manufacturer = self.get_or_create_manifacturer(device.manufacturer)
+            upstream_manufacturer = self.get_or_create_manifacturer(manufacturer)
             upstream_device_type = self.netbox_api.dcim.device_types.create(
                 manufacturer=upstream_manufacturer.id,
-                model=device.model,
-                part_number=device.model,
-                slug=sanitize_slug(f"{device.manufacturer}-{device.model}"),
+                model=model,
+                part_number=model,
+                slug=sanitize_slug(f"{manufacturer}-{model}"),
             )
 
             # Update local dicts so it stays synced with netbox without needing to fetch again
