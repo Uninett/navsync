@@ -18,6 +18,7 @@ from navsync.parser import (
     NameStr,
     SerialStr,
     Site,
+    SlugStr,
     VirtualChassis,
     get_locations_from_devices,
     get_netbox_entities,
@@ -153,8 +154,8 @@ class Syncer:
         self.upstream_device_types_by_part_number = (
             self._get_upstream_device_types_by_part_number()
         )
-        self.upstream_device_types_by_slug = self._get_upstream_device_types_by_slug()
-        self.upstream_manufacturers_by_slug = self._get_upstream_manufacturers()
+        self.upstream_device_types_by_model = self._get_upstream_device_types_by_model()
+        self.upstream_manufacturers = self._get_upstream_manufacturers()
         self.tenants = self._get_upstream_tenants()
 
         self._sync_sites(sites)
@@ -217,7 +218,10 @@ class Syncer:
             tags = [tag.name for tag in upstream_vc.tags]
             if "navsync" not in tags or "cnaas" not in tags:
                 continue
-            if upstream_vc.role and upstream_vc.role.slug == "verktykassecnaas":
+            if (
+                hasattr(upstream_vc, "role")
+                and upstream_vc.role.slug == "verktykassecnaas"
+            ):
                 continue
             try:
                 self._unregister_devices_as_members_of_vc(upstream_vc, upstream_devices)
@@ -296,6 +300,7 @@ class Syncer:
             for tag_id in upstream_virtual_chassis_tag_ids
             if tag_id not in tag_ids
         ]
+        tag_ids.sort()
         upstream_virtual_chassis.tags = tag_ids
         if upstream_virtual_chassis.updates():
             _logger.debug(f"Updating virtual chassis {upstream_virtual_chassis.name}")
@@ -308,17 +313,16 @@ class Syncer:
 
     def _sync_assets(self, assets: dict[NameStr, Asset]):
         upstream_devices_by_name = self._get_upstream_devices()
-        upstream_assets_by_serial = self._get_upstream_assets()
-        assets_by_serial = {
-            asset.serial: asset for asset in assets.values() if asset.serial is not None
-        }
+        upstream_assets = self._get_upstream_assets()
+        upstream_asset_list = [
+            asset
+            for device_assets in upstream_assets.values()
+            for asset in device_assets.values()
+        ]
 
-        self._shelve_all_missing_assets(upstream_assets_by_serial, assets_by_serial)
+        self._shelve_all_missing_assets(upstream_assets, assets.values())
 
         for device_name, asset in assets.items():
-            if not asset.serial:
-                continue
-            upstream_asset = upstream_assets_by_serial.get(asset.serial)
             upstream_device = upstream_devices_by_name.get(device_name)
             if upstream_device is None:
                 _logger.error(
@@ -326,9 +330,12 @@ class Syncer:
                     f"{device_name}. Skipping asset {asset.serial}"
                 )
                 continue
+            upstream_asset = upstream_assets.get(
+                upstream_device.device_type.id, {}
+            ).get(asset.serial)
 
             prior_asset = self._get_upstream_asset_for_device(
-                upstream_device.id, upstream_assets_by_serial.values()
+                upstream_device.id, upstream_asset_list
             )
             if prior_asset and prior_asset.serial != asset.serial:
                 _logger.debug(
@@ -367,7 +374,6 @@ class Syncer:
         self, asset: Asset, upstream_asset: Record, upstream_device: Record
     ):
         upstream_asset.device = upstream_device.id
-        upstream_asset.device_type = upstream_device.device_type.id
         upstream_asset.owner = asset.owner
         upstream_asset.tenant = asset.tenant
         upstream_asset.status = asset.status
@@ -378,6 +384,7 @@ class Syncer:
         tag_ids += [
             tag_id for tag_id in upstream_asset_tag_ids if tag_id not in tag_ids
         ]
+        tag_ids.sort()
         upstream_asset.tags = tag_ids
         if upstream_asset.updates():
             # There is a problem where netbox sometimes returns a 500 error
@@ -392,29 +399,46 @@ class Syncer:
 
     def _shelve_all_missing_assets(
         self,
-        upstream_assets_by_serial: dict[str, Record],
-        assets_by_serial: dict[str, Asset],
+        upstream_assets: dict[int, dict[SerialStr, Record]],
+        new_assets: Sequence[Asset],
     ):
         """Shelve any upstream assets that were registered by navsync but were not found in the current sync"""
-        for upstream_serial, upstream_asset in upstream_assets_by_serial.items():
-            if upstream_serial in assets_by_serial:
-                continue
-            tags = [tag.name for tag in upstream_asset.tags]
-            if "navsync" not in tags or "cnaas" not in tags:
-                continue
-            if upstream_asset.status != "used":
-                continue
-            _logger.debug(f"Shelving asset {upstream_serial}")
-            upstream_asset.status = "stored"
-            upstream_asset.device = None
-            # There is a problem where netbox sometimes returns a 500 error
-            # when you save an asset even though the asset is saved successfully.
-            try:
-                upstream_asset.save()
-            except RequestError as e:
-                _logger.error(
-                    f"Failed to shelve asset {upstream_asset.serial}: {str(e)}"
-                )
+        new_assets_by_device_type_and_serial = {}
+        for new_asset in new_assets:
+            device_type = self.get_or_create_device_type(
+                new_asset.manufacturer, new_asset.model
+            )
+            if device_type.id not in new_assets_by_device_type_and_serial:
+                new_assets_by_device_type_and_serial[device_type.id] = {}
+            new_assets_by_device_type_and_serial[device_type.id][new_asset.serial] = (
+                new_asset
+            )
+
+        for device_type_id, assets in upstream_assets.items():
+            for serial, upstream_asset in assets.items():
+                if new_assets_by_device_type_and_serial.get(device_type_id, {}).get(
+                    serial
+                ):
+                    continue
+
+                tags = [tag.name for tag in upstream_asset.tags]
+                if "navsync" not in tags or "cnaas" not in tags:
+                    continue
+                if upstream_asset.status != "used":
+                    continue
+                self._shelve_asset(upstream_asset)
+
+    def _shelve_asset(self, upstream_asset: Record):
+        """Shelve an asset by setting its status to 'stored' and unassigning it from any device"""
+        _logger.debug(f"Shelving asset {upstream_asset.serial}")
+        upstream_asset.status = "stored"
+        upstream_asset.device = None
+        # There is a problem where netbox sometimes returns a 500 error
+        # when you save an asset even though the asset is saved successfully.
+        try:
+            upstream_asset.save()
+        except RequestError as e:
+            _logger.error(f"Failed to shelve asset {upstream_asset.serial}: {str(e)}")
 
     def _get_upstream_asset_for_device(
         self, device_id: int, upstream_assets: Sequence[Record]
@@ -508,7 +532,9 @@ class Syncer:
         upstream_location: Optional[Record] = None,
     ):
         try:
-            upstream_device_type = self.get_or_create_device_type(device)
+            upstream_device_type = self.get_or_create_device_type(
+                device.manufacturer, device.model
+            )
         except (RequestError, ValueError) as e:
             _logger.error(
                 f"Got error while getting or creating device type for model {device.model}: {str(e)}. Skipping device {device.name}"
@@ -551,13 +577,16 @@ class Syncer:
         tag_ids += [
             tag_id for tag_id in upstream_device_tag_ids if tag_id not in tag_ids
         ]
+        tag_ids.sort()
         upstream_device.tags = tag_ids
 
         upstream_device.role = upstream_device_role.id
         upstream_device.status = "active"
         upstream_device.tenant = device.tenant
         try:
-            upstream_device_type = self.get_or_create_device_type(device)
+            upstream_device_type = self.get_or_create_device_type(
+                device.manufacturer, device.model
+            )
         except (RequestError, ValueError) as e:
             _logger.error(
                 f"Got error while getting or creating device type for model {device.model}: {str(e)}. Not updating device type for device {device.name}."
@@ -572,53 +601,50 @@ class Syncer:
             except RequestError as e:
                 _logger.error(f"Failed to update device {device.name}: {str(e)}")
 
-    def _get_upstream_manufacturers(self) -> dict[str, Record]:
+    def _get_upstream_manufacturers(self) -> dict[SlugStr, Record]:
         """Maps slug to manufacturer Record"""
         upstream_manufacturers = self.netbox_api.dcim.manufacturers.all()
         return {m.slug: m for m in upstream_manufacturers}
 
-    def get_or_create_device_type(self, device: Device):
-        upstream_device_type = self.upstream_device_types_by_part_number.get(
-            device.model
-        )
+    def get_or_create_device_type(self, manufacturer: str, model: str) -> Record:
+        upstream_device_type = self._get_device_type(manufacturer, model)
         if not upstream_device_type:
-            if device.model is None or device.manufacturer is None:
-                raise ValueError(
-                    f"Device {device.name} is missing model or manufacturer information. Cannot create device type for it."
-                )
-            upstream_manufacturer = self.get_or_create_manifacturer(device)
-            device_type_slug = sanitize_slug(
-                f"{upstream_manufacturer.name} {device.model}"
+            upstream_manufacturer = self.get_or_create_manifacturer(manufacturer)
+            upstream_device_type = self.netbox_api.dcim.device_types.create(
+                manufacturer=upstream_manufacturer.id,
+                model=model,
+                part_number=model,
+                slug=sanitize_slug(f"{manufacturer}-{model}"),
             )
-            upstream_device_type = self.upstream_device_types_by_slug.get(
-                device_type_slug
-            )
-            if not upstream_device_type:
-                upstream_device_type = self.netbox_api.dcim.device_types.create(
-                    manufacturer=upstream_manufacturer.id,
-                    model=device.model,
-                    part_number=device.model,
-                    slug=device_type_slug,
-                )
+
+            # Update local dicts so it stays synced with netbox without needing to fetch again
+            if upstream_manufacturer.slug not in self.upstream_device_types_by_model:
+                self.upstream_device_types_by_model[upstream_manufacturer.slug] = {}
+            self.upstream_device_types_by_model[upstream_manufacturer.slug][
+                upstream_device_type.model
+            ] = upstream_device_type
+            if (
+                upstream_manufacturer.slug
+                not in self.upstream_device_types_by_part_number
+            ):
                 self.upstream_device_types_by_part_number[
-                    upstream_device_type.part_number
-                ] = upstream_device_type
-                self.upstream_device_types_by_slug[upstream_device_type.slug] = (
-                    upstream_device_type
-                )
+                    upstream_manufacturer.slug
+                ] = {}
+            self.upstream_device_types_by_part_number[upstream_manufacturer.slug][
+                upstream_device_type.part_number
+            ] = upstream_device_type
+
         return upstream_device_type
 
-    def get_or_create_manifacturer(self, device: Device) -> Record:
-        manufacturer_slug = sanitize_slug(device.manufacturer)
-        upstream_manufacturer = self.upstream_manufacturers_by_slug.get(
-            manufacturer_slug
-        )
+    def get_or_create_manifacturer(self, name: str) -> Record:
+        manufacturer_slug = sanitize_slug(name)
+        upstream_manufacturer = self.upstream_manufacturers.get(manufacturer_slug)
         if not upstream_manufacturer:
             upstream_manufacturer = self.netbox_api.dcim.manufacturers.create(
-                name=device.manufacturer,
+                name=name,
                 slug=manufacturer_slug,
             )
-            self.upstream_manufacturers_by_slug[upstream_manufacturer.slug] = (
+            self.upstream_manufacturers[upstream_manufacturer.slug] = (
                 upstream_manufacturer
             )
         return upstream_manufacturer
@@ -674,6 +700,7 @@ class Syncer:
         tag_ids += [
             tag_id for tag_id in upstream_location_tag_ids if tag_id not in tag_ids
         ]
+        tag_ids.sort()
 
         upstream_location.tags = tag_ids
         upstream_location.status = location.status
@@ -724,6 +751,7 @@ class Syncer:
         tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
         upstream_site_tag_ids = self._get_tag_ids_from_tags(upstream_site.tags)
         tag_ids += [tag_id for tag_id in upstream_site_tag_ids if tag_id not in tag_ids]
+        tag_ids.sort()
 
         upstream_site.tags = tag_ids
         upstream_site.status = site.status
@@ -790,30 +818,42 @@ class Syncer:
             for chassis in self.netbox_api.dcim.virtual_chassis.all()
         }
 
-    def _get_upstream_assets(self) -> dict[SerialStr, Record]:
-        """Returns dict mapping serial number to asset"""
-        return {
-            asset.serial: asset
-            for asset in self.netbox_api.plugins.inventory.assets.all()
-        }
+    def _get_upstream_assets(self) -> dict[int, dict[SerialStr, Record]]:
+        """Returns dict mapping device type IDs and serial numbers to assets. The first dict maps device type id to a dict of serial numbers, and the second dict maps serial numbers to asset Records"""
+        assets = {}
+        for asset in self.netbox_api.plugins.inventory.assets.all():
+            if not asset.device_type or not asset.serial:
+                continue
+            if asset.device_type.id not in assets:
+                assets[asset.device_type.id] = {}
+            assets[asset.device_type.id][asset.serial] = asset
+        return assets
 
     def _get_upstream_tenants(self) -> dict[NameStr, Record]:
         """Returns dict mapping name to tenant"""
         return {tenant.name: tenant for tenant in self.netbox_api.tenancy.tenants.all()}
 
-    def _get_upstream_device_types_by_part_number(self) -> dict[str, Record]:
-        """Returns dict mapping part number to device type"""
-        return {
-            device_type.part_number: device_type
-            for device_type in self.netbox_api.dcim.device_types.all()
-        }
+    def _get_upstream_device_types_by_part_number(
+        self,
+    ) -> dict[SlugStr, dict[str, Record]]:
+        """Returns dict mapping manufacturer slug to part numbers and device types"""
+        device_types = {}
+        for device_type in self.netbox_api.dcim.device_types.all():
+            if device_type.manufacturer.slug not in device_types:
+                device_types[device_type.manufacturer.slug] = {}
+            device_types[device_type.manufacturer.slug][device_type.part_number] = (
+                device_type
+            )
+        return device_types
 
-    def _get_upstream_device_types_by_slug(self) -> dict[str, Record]:
-        """Returns dict mapping slug to device type"""
-        return {
-            device_type.slug: device_type
-            for device_type in self.netbox_api.dcim.device_types.all()
-        }
+    def _get_upstream_device_types_by_model(self) -> dict[SlugStr, dict[str, Record]]:
+        """Returns dict mapping manufacturer slug to models and device types"""
+        device_types = {}
+        for device_type in self.netbox_api.dcim.device_types.all():
+            if device_type.manufacturer.slug not in device_types:
+                device_types[device_type.manufacturer.slug] = {}
+            device_types[device_type.manufacturer.slug][device_type.model] = device_type
+        return device_types
 
     def _get_upstream_device_roles(self) -> dict[NameStr, Record]:
         """Returns dict mapping name to device role"""
@@ -1067,6 +1107,26 @@ class Syncer:
             if tag_id not in tag_ids:
                 tag_ids.append(tag_id)
         return tag_ids
+
+    def _get_device_type(self, manufacturer: str, model: str) -> Optional[Record]:
+        device_type = self._get_device_type_by_part_number(manufacturer, model)
+        if device_type:
+            return device_type
+        return self._get_device_type_by_model(manufacturer, model)
+
+    def _get_device_type_by_part_number(
+        self, manufacturer: str, part_number: str
+    ) -> Optional[Record]:
+        return self.upstream_device_types_by_part_number.get(
+            sanitize_slug(manufacturer), {}
+        ).get(part_number)
+
+    def _get_device_type_by_model(
+        self, manufacturer: str, model: str
+    ) -> Optional[Record]:
+        return self.upstream_device_types_by_model.get(
+            sanitize_slug(manufacturer), {}
+        ).get(model)
 
 
 if __name__ == "__main__":
