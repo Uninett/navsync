@@ -551,6 +551,7 @@ class Syncer:
             "site": upstream_site.id,
             "tags": tag_ids,
             "tenant": device.tenant,
+            "status": device.status,
         }
         if upstream_location:
             new_device_dict["location"] = upstream_location.id
@@ -583,7 +584,7 @@ class Syncer:
         upstream_device.tags = tag_ids
 
         upstream_device.role = upstream_device_role.id
-        upstream_device.status = "active"
+        upstream_device.status = device.status
         upstream_device.tenant = device.tenant
         try:
             upstream_device_type = self.get_or_create_device_type(
