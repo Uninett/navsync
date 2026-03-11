@@ -76,6 +76,8 @@ class NavBox:
     organization_contact: str
     organization_data: dict[str, Optional[str]]
 
+    up: bool
+
     def __str__(self):
         infomap = (
             ("sysname", self.sysname),
@@ -194,6 +196,7 @@ class Api:
                 organization_description=json["organization"]["description"],
                 organization_contact=json["organization"]["contact"],
                 organization_data=json["organization"]["data"],
+                up=True if json["up"] == "y" else False,
             )
             box_by_id[json["id"]] = box
         return box_by_id
