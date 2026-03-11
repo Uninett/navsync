@@ -15,6 +15,8 @@ from navsync.parser import (
     Asset,
     Device,
     Location,
+    ManufacturerStr,
+    ModelStr,
     NameStr,
     SerialStr,
     Site,
@@ -1012,7 +1014,68 @@ class Syncer:
                 case _:
                     raise TypeError(f"Unexpected entity type {type(entity)}")
 
+        devices = self._handle_duplicate_serials(devices)
+
         return virtual_chassises, devices
+
+    def _handle_duplicate_serials(self, devices: dict[NameStr, Device]):
+        devices_copy = devices.copy()
+        serials = self._group_devices_by_type_and_serial(devices.values())
+        for manufacturer, serials_by_manufacturer in serials.items():
+            for model, serials_by_model in serials_by_manufacturer.items():
+                for serial, devices_with_serial in serials_by_model.items():
+                    if len(devices_with_serial) > 1:
+                        _logger.warning(
+                            f"Duplicate asset {serial} found for manufacturer {manufacturer} and model {model} in devices {[device.name for device in devices_with_serial]}"
+                        )
+                    else:
+                        continue
+                    up_devices = [
+                        device for device in devices_with_serial if not device.is_down
+                    ]
+                    if len(up_devices) == 1:
+                        device_to_keep = up_devices[0]
+                        _logger.debug(
+                            f"Device {device_to_keep.name} is up while the other device(s) with the same serial are down. Removing asset from the downed devices."
+                        )
+                        for device in devices_with_serial:
+                            if device.is_down:
+                                devices_copy[device.name].asset = None
+                    elif len(up_devices) > 1:
+                        _logger.error(
+                            f"Multiple devices with asset {serial} are marked as up. Syncing devices without assets."
+                        )
+                        for device in devices_with_serial:
+                            devices_copy[device.name].asset = None
+                    else:
+                        _logger.error(
+                            f"All devices with asset {serial} are marked as down. Syncing devices without assets."
+                        )
+                        for device in devices_with_serial:
+                            devices_copy[device.name].asset = None
+
+        return devices_copy
+
+    def _group_devices_by_type_and_serial(
+        self,
+        devices: Sequence[Device],
+    ) -> dict[ManufacturerStr, dict[ModelStr, dict[SerialStr, list[Device]]]]:
+        """Groups devices by manufacturer, model and serial number"""
+        grouped_dict = {}
+        for device in devices:
+            if not device.asset:
+                continue
+            manufacturer = device.asset.manufacturer
+            model = device.asset.model
+            serial = device.asset.serial
+            if manufacturer not in grouped_dict:
+                grouped_dict[manufacturer] = {}
+            if model not in grouped_dict[manufacturer]:
+                grouped_dict[manufacturer][model] = {}
+            if serial not in grouped_dict[manufacturer][model]:
+                grouped_dict[manufacturer][model][serial] = []
+            grouped_dict[manufacturer][model][serial].append(device)
+        return grouped_dict
 
     def _generate_nav_token(self, aud: str):
         now = datetime.now(timezone.utc)
