@@ -511,7 +511,10 @@ class Syncer:
                 continue
             if upstream_device.role and upstream_device.role.slug == "verktykassecnaas":
                 continue
-            if upstream_device.status.value != "active":
+            if (
+                upstream_device.status.value != "active"
+                and upstream_device.status.value != "offline"
+            ):
                 continue
             _logger.debug(f"Decommissioning device {upstream_device.name}")
             upstream_device.status = "inventory"
@@ -1032,7 +1035,9 @@ class Syncer:
                     else:
                         continue
                     up_devices = [
-                        device for device in devices_with_serial if not device.is_down
+                        device
+                        for device in devices_with_serial
+                        if not device.status == "offline"
                     ]
                     if len(up_devices) == 1:
                         device_to_keep = up_devices[0]
@@ -1040,7 +1045,7 @@ class Syncer:
                             f"Device {device_to_keep.name} is up while the other device(s) with the same serial are down. Removing asset from the downed devices."
                         )
                         for device in devices_with_serial:
-                            if device.is_down:
+                            if device.status == "offline":
                                 devices_copy[device.name].asset = None
                     elif len(up_devices) > 1:
                         _logger.error(

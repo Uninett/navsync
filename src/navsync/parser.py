@@ -489,10 +489,10 @@ def _parse_device(
         sysname = navbox.sysname
     if physical_chassis:
         asset = _parse_asset(navbox, physical_chassis, navinfo)
-        is_down = True if physical_chassis.gone_since is not None else False
+        is_up = physical_chassis.gone_since is None and navbox.up
     else:
         asset = None
-        is_down = False
+        is_up = navbox.up
     model = navbox.type_name.upper() if navbox.type_name is not None else None
     manufacturer = (
         navbox.type_vendor.lower() if navbox.type_vendor is not None else None
@@ -509,7 +509,7 @@ def _parse_device(
         location=_parse_location(navbox, navinfo),
         role=_get_device_role_from_navbox(navbox),
         vc_position=position,
-        is_down=is_down,
+        status="active" if is_up else "offline",
     )
 
 
