@@ -80,6 +80,15 @@ class Device:
     ]
     manufacturer: ManufacturerStr
     model: ModelStr
+    status: Literal[
+        "active",
+        "offline",
+        "planned",
+        "staged",
+        "failed",
+        "inventory",
+        "decommissioning",
+    ] = "active"
     is_down: bool = False
     asset: Asset | None = None
     vc_position: int | None = None
