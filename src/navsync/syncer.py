@@ -104,6 +104,12 @@ def parse_args():
         help="The lowest severity level a message being logged can have",
         default="WARNING",
     )
+    parser.add_argument(
+        "--nosync",
+        action="store_true",
+        help="Do not sync navboxes from NAV to Netbox, only get data from NAV instances. Useful "
+        "for testing connectivity and permissions towards NAV instances without making any changes in Netbox",
+    )
     args = parser.parse_args()
     return args
 
@@ -121,6 +127,7 @@ class Syncer:
     issuer: str
     netbox_api: netbox.Api
     https: bool
+    nosync: bool
 
     def __init__(
         self,
@@ -129,12 +136,14 @@ class Syncer:
         expiry_delta: timedelta,
         issuer: str,
         https: bool,
+        nosync: bool,
     ):
         self.netbox_api = netbox_api
         self.private_key = private_key
         self.expiry_delta = expiry_delta
         self.issuer = issuer
         self.https = https
+        self.nosync = nosync
 
     def sync(self):
         """
@@ -149,6 +158,10 @@ class Syncer:
             for device in devices.values()
             if device.asset is not None
         }
+
+        if self.nosync:
+            _logger.info("Nosync flag is set, not syncing to Netbox")
+            return
 
         self.tags = self._get_or_create_tags(
             sites + locations + list(devices.values()) + list(assets.values())
@@ -189,6 +202,7 @@ class Syncer:
             expiry_delta=expiry_delta,
             issuer=nav_iss_claim,
             https=https,
+            nosync=args.nosync,
         )
 
     def _sync_virtual_chassis(self, chassis: dict[NameStr, VirtualChassis]):
