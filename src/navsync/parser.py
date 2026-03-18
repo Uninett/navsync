@@ -23,12 +23,12 @@ class Site:
     name: str
     tags: list[str]
     slug: str
-    latitude: float
-    longitude: float
     tenant: int
     status: Literal["active", "decommissioning", "planned", "retired", "staging"] = (
         "active"
     )
+    latitude: float | None = None
+    longitude: float | None = None
     physical_address: str | None = None
     region: int | None = None
     description: str | None = None
