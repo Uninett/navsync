@@ -598,8 +598,8 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
             tenant=navinfo.tenant_id,
             description=description,
         )
-    elif latitude is not None and longitude is not None:
-        name = f"{latitude:.6f}N {longitude:.6f}E"
+    elif navbox.room_location:
+        name = navbox.room_location.name
         slug = sanitize_slug(name)
         return Site(
             name=name,
