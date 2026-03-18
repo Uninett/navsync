@@ -89,7 +89,6 @@ class Device:
         "inventory",
         "decommissioning",
     ] = "active"
-    is_down: bool = False
     asset: Asset | None = None
     vc_position: int | None = None
     navbox: NavBox | None = None
