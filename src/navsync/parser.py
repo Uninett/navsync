@@ -23,12 +23,12 @@ class Site:
     name: str
     tags: list[str]
     slug: str
-    latitude: float
-    longitude: float
     tenant: int
     status: Literal["active", "decommissioning", "planned", "retired", "staging"] = (
         "active"
     )
+    latitude: float | None = None
+    longitude: float | None = None
     physical_address: str | None = None
     region: int | None = None
     description: str | None = None
@@ -89,7 +89,6 @@ class Device:
         "inventory",
         "decommissioning",
     ] = "active"
-    is_down: bool = False
     asset: Asset | None = None
     vc_position: int | None = None
     navbox: NavBox | None = None
@@ -598,8 +597,8 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
             tenant=navinfo.tenant_id,
             description=description,
         )
-    elif latitude is not None and longitude is not None:
-        name = f"{latitude:.6f}N {longitude:.6f}E"
+    elif navbox.room_location:
+        name = navbox.room_location.name
         slug = sanitize_slug(name)
         return Site(
             name=name,
