@@ -68,6 +68,7 @@ class Asset:
     status: Literal["stored", "used", "retired"] = "used"
     contact: int | str | None = None
     navbox: NavBox | None = None
+    software_version: Optional[str] = None
 
 
 @dataclass
@@ -551,6 +552,7 @@ def _parse_asset(navbox: NavBox, entity: NavBoxEntity, navinfo: NavServerInfo) -
         model=model,
         owner=navinfo.owner_id,
         tenant=navinfo.tenant_id,
+        software_version=entity.software_revision,
     )
 
 

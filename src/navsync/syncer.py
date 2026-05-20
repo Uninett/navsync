@@ -376,6 +376,7 @@ class Syncer:
             "tenant": asset.tenant,
             "device": upstream_device.id,
             "device_type": upstream_device.device_type.id,
+            "custom_fields": {"software_version": asset.software_version},
         }
 
         _logger.debug(f"Creating new asset {asset.serial}")
@@ -395,6 +396,8 @@ class Syncer:
         upstream_asset.status = asset.status
         if asset.contact is not None:
             upstream_asset.contact = asset.contact
+        if asset.software_version:
+            upstream_asset.custom_fields = {"software_version": asset.software_version}
         tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
         upstream_asset_tag_ids = self._get_tag_ids_from_tags(upstream_asset.tags)
         tag_ids += [
