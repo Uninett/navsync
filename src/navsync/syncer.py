@@ -699,6 +699,8 @@ class Syncer:
         }
         if location.description:
             new_location_dict["description"] = location.description
+        if location.url:
+            new_location_dict["custom_fields"] = {"nav_url": location.url}
         _logger.debug(f"Creating new location {location.name}")
         try:
             self.netbox_api.dcim.locations.create(**new_location_dict)
@@ -725,6 +727,9 @@ class Syncer:
         upstream_location.tags = tag_ids
         upstream_location.status = location.status
         upstream_location.site = upstream_site.id
+        if location.url is not None:
+            upstream_location.custom_fields = {"nav_url": location.url}
+
         if upstream_location.updates():
             _logger.debug(f"Updating location {upstream_location.name}")
             try:
