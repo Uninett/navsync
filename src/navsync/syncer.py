@@ -1,6 +1,7 @@
 import argparse
 import logging
 import time
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Iterable, Optional, Sequence, Union
 
@@ -24,8 +25,6 @@ from navsync.parser import (
     Site,
     SlugStr,
     VirtualChassis,
-    get_locations_from_devices,
-    get_sites_from_locations,
 )
 from navsync.utils import (
     NavServerInfo,
@@ -36,6 +35,14 @@ from navsync.utils import (
 )
 
 _logger = logging.getLogger(__name__)
+
+
+@dataclass
+class NavData:
+    sites: list[Site] = field(default_factory=list)
+    locations: list[Location] = field(default_factory=list)
+    chassis: dict[NameStr, VirtualChassis] = field(default_factory=dict)
+    devices: dict[NameStr, Device] = field(default_factory=dict)
 
 
 EXAMPLE_CONFIG = """\
@@ -151,12 +158,10 @@ class Syncer:
         Syncs all navboxes from all NAV server instances found on the Netbox
         server to Netbox
         """
-        chassis, devices = self._get_virtual_chassis_and_devices()
-        locations = get_locations_from_devices(devices.values())
-        sites = get_sites_from_locations(locations)
+        nav_data = self._fetch_nav_data()
         assets = {
             device.name: device.asset
-            for device in devices.values()
+            for device in nav_data.devices.values()
             if device.asset is not None
         }
 
@@ -165,7 +170,10 @@ class Syncer:
             return
 
         self.tags = self._get_or_create_tags(
-            sites + locations + list(devices.values()) + list(assets.values())
+            nav_data.sites
+            + nav_data.locations
+            + list(nav_data.devices.values())
+            + list(assets.values())
         )
         self.upstream_device_types_by_part_number = (
             self._get_upstream_device_types_by_part_number()
@@ -174,12 +182,11 @@ class Syncer:
         self.upstream_manufacturers = self._get_upstream_manufacturers()
         self.tenants = self._get_upstream_tenants()
 
-        self._sync_sites(sites)
-        self._sync_locations(locations)
-        self._sync_devices(devices)
+        self._sync_sites_and_locations(nav_data.sites)
+        self._sync_devices(nav_data.devices)
         self._sync_assets(assets)
 
-        self._sync_virtual_chassis(chassis)
+        self._sync_virtual_chassis(nav_data.chassis)
 
     @classmethod
     def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
@@ -494,7 +501,7 @@ class Syncer:
             )
             if not upstream_site:
                 raise ValueError(
-                    f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites`"
+                    f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites_and_locations`"
                 )
             upstream_location = upstream_locations.get(upstream_site.name, {}).get(
                 device.location.name
@@ -679,25 +686,73 @@ class Syncer:
             )
         return upstream_manufacturer
 
-    def _sync_locations(self, locations: Sequence[Location]):
+    def _sync_sites_and_locations(self, sites: Sequence[Site]):
+        """Syncs sites and their nested location hierarchies to Netbox."""
         upstream_sites = self._get_upstream_sites()
         upstream_locations = self._get_upstream_locations()
 
+        for site in sites:
+            upstream_site = self._get_upstream_site(upstream_sites, site)
+            if upstream_site:
+                self._update_site(site, upstream_site)
+            else:
+                upstream_site = self._create_site(site)
+                if upstream_site is None:
+                    _logger.error(
+                        f"Could not create site {site.name}; skipping location sync."
+                    )
+                    continue
+                upstream_sites.append(upstream_site)
+
+            self._sync_location_tree(
+                site.locations.values(), upstream_site, upstream_locations
+            )
+
+    def _sync_location_tree(
+        self,
+        locations: Sequence[Location],
+        upstream_site: Record,
+        upstream_locations: dict[NameStr, dict[NameStr, Record]],
+        parent_id: Optional[int] = None,
+    ):
+        """Recursively syncs a location tree for a site, creating parents before children."""
         for location in locations:
-            upstream_site = self._get_upstream_site(upstream_sites, location.site)
-            if not upstream_site:
-                raise ValueError(
-                    f"Could not find site {location.site.name}. It should have been created during `_sync_sites`"
-                )
             upstream_location = upstream_locations.get(upstream_site.name, {}).get(
                 location.name
             )
             if upstream_location:
-                self._update_location(location, upstream_location, upstream_site)
+                self._update_location(
+                    location,
+                    upstream_location,
+                    upstream_site,
+                    parent_id,
+                )
             else:
-                self._create_location(location, upstream_site)
+                upstream_location = self._create_location(
+                    location,
+                    upstream_site,
+                    parent_id,
+                )
+                if upstream_location is None:
+                    continue
+                upstream_locations.setdefault(upstream_site.name, {})[location.name] = (
+                    upstream_location
+                )
 
-    def _create_location(self, location: Location, upstream_site: Record):
+            if location.child_locations:
+                self._sync_location_tree(
+                    location.child_locations.values(),
+                    upstream_site,
+                    upstream_locations,
+                    upstream_location.id,
+                )
+
+    def _create_location(
+        self,
+        location: Location,
+        upstream_site: Record,
+        parent_id: Optional[int] = None,
+    ) -> Optional[Record]:
         tag_ids = self._convert_tag_names_to_ids(location.tags + ["cnaas"], self.tags)
         new_location_dict = {
             "site": upstream_site.id,
@@ -707,25 +762,36 @@ class Syncer:
             "tags": tag_ids,
             "tenant": location.tenant,
         }
+        if parent_id is not None:
+            new_location_dict["parent"] = parent_id
         if location.description:
             new_location_dict["description"] = location.description
         if location.url:
             new_location_dict["custom_fields"] = {"nav_url": location.url}
-        _logger.debug(f"Creating new location {location.name}")
+        _logger.debug(
+            f"Creating new location {location.name} under site {upstream_site.name}"
+        )
         try:
-            self.netbox_api.dcim.locations.create(**new_location_dict)
+            return self.netbox_api.dcim.locations.create(**new_location_dict)
         except RequestError as e:
             _logger.error(f"Failed to create location {location.name}: {e}")
+            return None
 
     def _update_location(
         self,
         location: Location,
         upstream_location: Record,
         upstream_site: Record,
+        parent_id: Optional[int] = None,
     ):
         upstream_location.tenant = location.tenant
         if not upstream_location.description and location.description:
             upstream_location.description = location.description
+
+        if parent_id is not None:
+            upstream_location.parent = parent_id
+        else:
+            upstream_location.parent = None
 
         tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
         upstream_location_tag_ids = self._get_tag_ids_from_tags(upstream_location.tags)
@@ -748,15 +814,6 @@ class Syncer:
                 _logger.error(
                     f"Failed to update location {upstream_location.name}: {str(e)}"
                 )
-
-    def _sync_sites(self, sites: Sequence[Site]):
-        upstream_sites = self._get_upstream_sites()
-        for site in sites:
-            upstream_site = self._get_upstream_site(upstream_sites, site)
-            if upstream_site:
-                self._update_site(site, upstream_site)
-            else:
-                self._create_site(site)
 
     def _update_site(self, site: Site, upstream_site: Record):
         if site.latitude and site.longitude:
@@ -799,7 +856,7 @@ class Syncer:
             except RequestError as e:
                 _logger.error(f"Failed to update site {upstream_site.name}: {str(e)}")
 
-    def _create_site(self, site: Site):
+    def _create_site(self, site: Site) -> Optional[Record]:
         tag_ids = self._convert_tag_names_to_ids(site.tags + ["cnaas"], self.tags)
         new_site_dict = {
             "tenant": site.tenant,
@@ -823,9 +880,10 @@ class Syncer:
             new_site_dict["custom_fields"] = {"nav_url": site.url}
         _logger.debug(f"Creating new site {site.name}")
         try:
-            self.netbox_api.dcim.sites.create(**new_site_dict)
+            return self.netbox_api.dcim.sites.create(**new_site_dict)
         except RequestError as e:
             _logger.error(f"Failed to create site {site.name}: {e}")
+            return None
 
     def _convert_tag_names_to_ids(
         self, tag_names: list[NameStr], all_tags: dict[NameStr, int]
@@ -1012,60 +1070,73 @@ class Syncer:
                     return device
         return None
 
-    def _get_virtual_chassis_and_devices(
-        self,
-    ) -> tuple[dict[NameStr, VirtualChassis], dict[NameStr, Device]]:
-        entities = []
-        all_sites = {}
+    def _fetch_nav_data(self) -> NavData:
+        """Fetches all data from all NAV servers in a single pass."""
+        result = NavData()
+        sites: dict[str, Site] = {}  # keyed by name for duplicate detection
+        all_entities: list[VirtualChassis | Device] = []
+
         for nav_server in self._get_nav_servers():
             token = self._generate_nav_token(aud=nav_server.url)
             # Sleep to avoid issues with the `nbf` claim.
             time.sleep(1)
-            sites, locations = LocationHierarchyParser(
+            server_sites, server_locations = LocationHierarchyParser(
                 nav_server, token
             ).get_sites_and_locations()
-            _logger.error(locations.keys())
-            for site in sites.values():
-                if site.name in all_sites:
+
+            for site in server_sites.values():
+                if site.name in sites:
                     raise ValueError(
-                        f"Duplicate site name {site.name} found in NAV server {nav_server.url}. Site names must be unique across all NAV servers."
+                        f"Duplicate site name {site.name} found across NAV servers. Site names must be unique across all NAV servers."
                     )
-                all_sites[site.name] = site
-            entities.extend(
-                EntityParser(nav_server, token, locations=locations).parse()
+                sites[site.name] = site
+            result.locations.extend(server_locations.values())
+
+            token = self._generate_nav_token(aud=nav_server.url)
+            # Sleep to avoid issues with the `nbf` claim.
+            time.sleep(1)
+            all_entities.extend(
+                EntityParser(nav_server, token, locations=server_locations).parse()
             )
 
+        result.chassis, result.devices = self._get_virtual_chassis_and_devices(
+            all_entities
+        )
+        result.sites = list(sites.values())
+        result.devices = self._handle_duplicate_serials(result.devices)
+        return result
+
+    def _get_virtual_chassis_and_devices(
+        self,
+        entities: list[VirtualChassis | Device],
+    ) -> tuple[dict[NameStr, VirtualChassis], dict[NameStr, Device]]:
         virtual_chassises: dict[NameStr, VirtualChassis] = {}
         devices: dict[NameStr, Device] = {}
-
         for entity in entities:
             match entity:
                 case VirtualChassis():
                     if entity.name in virtual_chassises:
                         _logger.error(
-                            f"Duplicate virtual chassis name {entity.name} found in NAV server {nav_server.url}. Dropping duplicate."
+                            f"Duplicate virtual chassis name {entity.name}. Dropping duplicate."
                         )
                         continue
                     virtual_chassises[entity.name] = entity
                     for device in entity.devices:
                         if device.name in devices:
                             _logger.error(
-                                f"Duplicate device name {device.name} found in NAV server {nav_server.url}. Dropping duplicate."
+                                f"Duplicate device name {device.name}. Dropping duplicate."
                             )
                             continue
                         devices[device.name] = device
                 case Device():
                     if entity.name in devices:
                         _logger.error(
-                            f"Duplicate physical chassis name {entity.name} found in NAV server {nav_server.url}. Dropping duplicate."
+                            f"Duplicate physical chassis name {entity.name}. Dropping duplicate."
                         )
                         continue
                     devices[entity.name] = entity
                 case _:
                     raise TypeError(f"Unexpected entity type {type(entity)}")
-
-        devices = self._handle_duplicate_serials(devices)
-
         return virtual_chassises, devices
 
     def _handle_duplicate_serials(self, devices: dict[NameStr, Device]):
@@ -1138,7 +1209,12 @@ class Syncer:
             "aud": aud,
             "iss": self.issuer,
             "token_type": "access",
-            "endpoints": ["/api/1/netbox", "/api/1/netboxentity", "/api/1/location"],
+            "endpoints": [
+                "/api/1/netbox",
+                "/api/1/netboxentity",
+                "/api/1/location",
+                "/api/1/room",
+            ],
             "write": False,
         }
         return jwt.encode(jwt_claims, self.private_key, algorithm="RS256")
