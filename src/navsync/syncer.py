@@ -14,7 +14,9 @@ from navsync import config
 from navsync.parser import (
     Asset,
     Device,
+    EntityParser,
     Location,
+    LocationHierarchyParser,
     ManufacturerStr,
     ModelStr,
     NameStr,
@@ -23,7 +25,6 @@ from navsync.parser import (
     SlugStr,
     VirtualChassis,
     get_locations_from_devices,
-    get_netbox_entities,
     get_sites_from_locations,
 )
 from navsync.utils import (
@@ -1015,11 +1016,24 @@ class Syncer:
         self,
     ) -> tuple[dict[NameStr, VirtualChassis], dict[NameStr, Device]]:
         entities = []
+        all_sites = {}
         for nav_server in self._get_nav_servers():
             token = self._generate_nav_token(aud=nav_server.url)
             # Sleep to avoid issues with the `nbf` claim.
             time.sleep(1)
-            entities.extend(get_netbox_entities(nav_server, token))
+            sites, locations = LocationHierarchyParser(
+                nav_server, token
+            ).get_sites_and_locations()
+            _logger.error(locations.keys())
+            for site in sites.values():
+                if site.name in all_sites:
+                    raise ValueError(
+                        f"Duplicate site name {site.name} found in NAV server {nav_server.url}. Site names must be unique across all NAV servers."
+                    )
+                all_sites[site.name] = site
+            entities.extend(
+                EntityParser(nav_server, token, locations=locations).parse()
+            )
 
         virtual_chassises: dict[NameStr, VirtualChassis] = {}
         devices: dict[NameStr, Device] = {}
