@@ -95,6 +95,7 @@ class Device:
     asset: Asset | None = None
     vc_position: int | None = None
     navbox: NavBox | None = None
+    url: Optional[str] = None
 
 
 @dataclass
@@ -501,6 +502,7 @@ def _parse_device(
     )
     if not model or not manufacturer:
         raise ValueError("Missing model or manufacturer")
+    url = urljoin(navinfo.url, f"ipdevinfo/{navbox.sysname}/")
     return Device(
         name=sysname,
         tags=["navsync"],
@@ -512,6 +514,7 @@ def _parse_device(
         role=_get_device_role_from_navbox(navbox),
         vc_position=position,
         status="active" if is_up else "offline",
+        url=url,
     )
 
 

@@ -572,6 +572,8 @@ class Syncer:
         }
         if upstream_location:
             new_device_dict["location"] = upstream_location.id
+        if device.url:
+            new_device_dict["custom_fields"] = {"nav": device.url}
 
         _logger.debug(f"Creating new device {device.name}")
         try:
@@ -603,6 +605,8 @@ class Syncer:
         upstream_device.role = upstream_device_role.id
         upstream_device.status = device.status
         upstream_device.tenant = device.tenant
+        if device.url:
+            upstream_device.custom_fields = {"nav_url": device.url}
         try:
             upstream_device_type = self.get_or_create_device_type(
                 device.manufacturer, device.model
