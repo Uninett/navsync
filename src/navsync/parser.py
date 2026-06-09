@@ -52,6 +52,7 @@ class Location:
     status: Literal["active", "decommissioning", "planned", "retired", "staging"] = (
         "active"
     )
+    url: Optional[str] = None
 
 
 @dataclass
@@ -559,6 +560,7 @@ def _parse_location(navbox: NavBox, navinfo: NavServerInfo) -> Location:
         tenant=navinfo.tenant_id,
         description=navbox.room_description,
         site=site,
+        url=urljoin(navinfo.url, f"search/room/{navbox.room_name}/"),
     )
 
 
