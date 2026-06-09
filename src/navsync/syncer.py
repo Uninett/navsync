@@ -767,6 +767,8 @@ class Syncer:
             upstream_site.physical_address = site.physical_address
         if site.region is not None:
             upstream_site.region = site.region
+        if site.url is not None:
+            upstream_site.custom_fields = {"nav_url": site.url}
 
         tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
         upstream_site_tag_ids = self._get_tag_ids_from_tags(upstream_site.tags)
@@ -802,6 +804,8 @@ class Syncer:
             new_site_dict["description"] = site.description
         if site.region:
             new_site_dict["region"] = site.region
+        if site.url:
+            new_site_dict["custom_fields"] = {"nav_url": site.url}
         _logger.debug(f"Creating new site {site.name}")
         try:
             self.netbox_api.dcim.sites.create(**new_site_dict)

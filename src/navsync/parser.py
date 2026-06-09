@@ -2,6 +2,7 @@ import logging
 from dataclasses import dataclass
 from enum import IntEnum
 from typing import Callable, Literal, NewType, Optional, Self, Sequence
+from urllib.parse import urljoin
 
 from navsync.nav import Api, NavBox, NavBoxEntity
 from navsync.utils import NavServerInfo, sanitize_slug
@@ -33,6 +34,7 @@ class Site:
     region: int | None = None
     description: str | None = None
     comments: str | None = None
+    url: Optional[str] = None
 
 
 @dataclass
@@ -584,6 +586,12 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
     address = _get_first(room_data, variants, ignore_case=True) or _get_first(
         location_data, variants, ignore_case=True
     )
+
+    if navbox.room_location:
+        url = urljoin(navinfo.url, f"search/location/{navbox.room_location.name}/")
+    else:
+        url = None
+
     if address:
         name = address.partition(",")[0]
         slug = sanitize_slug(name)
@@ -596,6 +604,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
             longitude=longitude,
             tenant=navinfo.tenant_id,
             description=description,
+            url=url,
         )
     elif navbox.room_location:
         name = navbox.room_location.name
@@ -608,6 +617,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
             longitude=longitude,
             tenant=navinfo.tenant_id,
             description=description,
+            url=url,
         )
     else:
         name = f"{navbox._room_location_id} for VK {navinfo.id}"
@@ -620,6 +630,7 @@ def _parse_site(navbox: NavBox, navinfo: NavServerInfo) -> Site:
             longitude=longitude,
             tenant=navinfo.tenant_id,
             description=description,
+            url=url,
         )
 
 
