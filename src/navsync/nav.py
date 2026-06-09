@@ -40,6 +40,7 @@ class NavBoxEntity:
     fru: Optional[bool]
     parent_relpos: Optional[int]
     serial_number: Optional[str]
+    software_revision: Optional[str]
 
     gone_since: Optional[dt.datetime]
     # discovered: dt.datetime #TODO: NOT YET INCLUDED THE NAV API BUT USEFUL FOR ESTIMATING DATE OF PURCHASE; need to add this from models.Device to the models.NetboxEntity NAV API endpoint
@@ -227,6 +228,7 @@ class Api:
                 name=json["name"] or "",
                 source=json["source"],
                 fru=json["fru"],
+                software_revision=json.get("software_revision"),
             )
             entity_by_id[json["id"]] = entity
         return entity_by_id
