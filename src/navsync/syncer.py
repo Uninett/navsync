@@ -397,7 +397,9 @@ class Syncer:
         if asset.contact is not None:
             upstream_asset.contact = asset.contact
         if asset.software_version:
-            upstream_asset.custom_fields = {"software_version": asset.software_version}
+            # Merge into the existing dict so _diff() compares equal dicts when the value
+            # hasn't changed. Replacing with a subset dict triggers a spurious update.
+            upstream_asset.custom_fields["software_version"] = asset.software_version
         tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
         upstream_asset_tag_ids = self._get_tag_ids_from_tags(upstream_asset.tags)
         tag_ids += [
@@ -609,7 +611,7 @@ class Syncer:
         upstream_device.status = device.status
         upstream_device.tenant = device.tenant
         if device.url:
-            upstream_device.custom_fields = {"nav_url": device.url}
+            upstream_device.custom_fields["nav_url"] = device.url
         try:
             upstream_device_type = self.get_or_create_device_type(
                 device.manufacturer, device.model
@@ -735,7 +737,7 @@ class Syncer:
         upstream_location.status = location.status
         upstream_location.site = upstream_site.id
         if location.url is not None:
-            upstream_location.custom_fields = {"nav_url": location.url}
+            upstream_location.custom_fields["nav_url"] = location.url
 
         if upstream_location.updates():
             _logger.debug(f"Updating location {upstream_location.name}")
@@ -780,7 +782,7 @@ class Syncer:
         if site.region is not None:
             upstream_site.region = site.region
         if site.url is not None:
-            upstream_site.custom_fields = {"nav_url": site.url}
+            upstream_site.custom_fields["nav_url"] = site.url
 
         tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
         upstream_site_tag_ids = self._get_tag_ids_from_tags(upstream_site.tags)
