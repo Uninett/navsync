@@ -486,7 +486,7 @@ class LocationHierarchyParser:
     def get_sites_and_locations(self) -> tuple[dict[str, Site], dict[str, Location]]:
         self._load_nav_records()
 
-        for room_id, room in self._rooms.items():
+        for room_id in self._rooms:
             room_to_root_path = self._get_room_to_root_path(room_id)
             root_location = room_to_root_path[-1]
             site = self._get_or_create_site(root_location)
