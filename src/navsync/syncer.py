@@ -576,7 +576,7 @@ class Syncer:
         if upstream_location:
             new_device_dict["location"] = upstream_location.id
         if device.url:
-            new_device_dict["custom_fields"] = {"nav": device.url}
+            new_device_dict["custom_fields"] = {"nav_url": device.url}
 
         _logger.debug(f"Creating new device {device.name}")
         try:
