@@ -214,7 +214,9 @@ class EntityParser:
             hierarchy_parser = LocationHierarchyParser(self._navinfo, self._token)
             _, self._locations = hierarchy_parser.get_sites_and_locations()
 
-        schedule_attempt_order: list[Callable[[NavBox], Device | VirtualChassis]] = [
+        schedule_attempt_order: list[
+            Callable[[NavBox, int], Device | VirtualChassis]
+        ] = [
             self._try_parse_standard_virtual_chassis,
             self._try_parse_juniper_virtual_chassis,
             self._try_parse_standard_virtual_router,
@@ -242,7 +244,7 @@ class EntityParser:
                 ):
                     continue
                 try:
-                    netbox_entities.append(schedule_attempt(navbox))
+                    netbox_entities.append(schedule_attempt(navbox, tenant_id))
                 except NextAttempt as err:
                     if err.include is not None:
                         if included_attempts is None:
@@ -261,7 +263,9 @@ class EntityParser:
                 _logger.error(f"Could not parse Navbox {navbox.sysname}, skipping")
         return netbox_entities
 
-    def _try_parse_standard_virtual_chassis(self, navbox: NavBox) -> VirtualChassis:
+    def _try_parse_standard_virtual_chassis(
+        self, navbox: NavBox, tenant_id: int
+    ) -> VirtualChassis:
         if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
             raise NextAttempt
 
@@ -307,9 +311,13 @@ class EntityParser:
                 "be wary of missing devices in the parsed Netbox virtual chassis"
             )
 
-        return self._parse_virtual_chassis(navbox, virtual_chassis, physical_chassises)
+        return self._parse_virtual_chassis(
+            navbox, virtual_chassis, physical_chassises, tenant_id
+        )
 
-    def _try_parse_juniper_virtual_chassis(self, navbox: NavBox) -> VirtualChassis:
+    def _try_parse_juniper_virtual_chassis(
+        self, navbox: NavBox, tenant_id: int
+    ) -> VirtualChassis:
         if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
             raise NextAttempt
 
@@ -355,12 +363,16 @@ class EntityParser:
             )
             raise NextAttempt
 
-        return self._parse_virtual_chassis(navbox, virtual_chassis, physical_chassises)
+        return self._parse_virtual_chassis(
+            navbox, virtual_chassis, physical_chassises, tenant_id
+        )
 
-    def _try_parse_standard_virtual_router(self, navbox: NavBox) -> None:
+    def _try_parse_standard_virtual_router(
+        self, navbox: NavBox, tenant_id: int
+    ) -> None:
         raise NextAttempt
 
-    def _try_parse_proprietary_mib(self, navbox: NavBox) -> None:
+    def _try_parse_proprietary_mib(self, navbox: NavBox, tenant_id: int) -> None:
         if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
             raise NextAttempt
         if len(navbox.entities) != 1:
@@ -379,7 +391,7 @@ class EntityParser:
         )
         raise NextAttempt([])
 
-    def _try_parse_physical_chassis(self, navbox: NavBox) -> Device:
+    def _try_parse_physical_chassis(self, navbox: NavBox, tenant_id: int) -> Device:
         chassis = None
         if navbox.entities:
             physical_chassises = [
@@ -403,7 +415,7 @@ class EntityParser:
                 f"Failed to find entities for Navbox {navbox.sysname}. Syncing without asset."
             )
         try:
-            return self._parse_device(navbox, chassis)
+            return self._parse_device(navbox, tenant_id, chassis)
         except ValueError as err:
             _logger.warning(
                 f"Failed to parse Navbox {navbox.sysname} as physical chassis: {err}"
@@ -415,6 +427,7 @@ class EntityParser:
         navbox: NavBox,
         virtual_chassis: NavBoxEntity,
         physical_chassises: list[NavBoxEntity],
+        tenant_id: int,
     ) -> VirtualChassis:
         if not physical_chassises:
             _logger.warning(
@@ -438,6 +451,7 @@ class EntityParser:
             try:
                 device = self._parse_device(
                     navbox,
+                    tenant_id,
                     physical_chassis,
                     position=physical_chassis.parent_relpos,
                 )
@@ -451,13 +465,14 @@ class EntityParser:
         return VirtualChassis(
             name=navbox.sysname,
             tags=["navsync"],
-            tenant=self._navinfo.tenant_id,
+            tenant=tenant_id,
             devices=devices,
         )
 
     def _parse_device(
         self,
         navbox: NavBox,
+        tenant_id: int,
         physical_chassis: Optional[NavBoxEntity] = None,
         position: Optional[int] = None,
     ) -> Device:
@@ -466,7 +481,7 @@ class EntityParser:
         else:
             sysname = navbox.sysname
         if physical_chassis:
-            asset = self._parse_asset(navbox, physical_chassis)
+            asset = self._parse_asset(navbox, physical_chassis, tenant_id=tenant_id)
             is_up = physical_chassis.gone_since is None and navbox.up
         else:
             asset = None
@@ -481,7 +496,7 @@ class EntityParser:
         return Device(
             name=sysname,
             tags=["navsync"],
-            tenant=self._navinfo.tenant_id,
+            tenant=tenant_id,
             manufacturer=manufacturer,
             model=model,
             asset=asset,
@@ -507,7 +522,9 @@ class EntityParser:
         else:
             return "unknown"
 
-    def _parse_asset(self, navbox: NavBox, entity: NavBoxEntity) -> Asset:
+    def _parse_asset(
+        self, navbox: NavBox, entity: NavBoxEntity, tenant_id: int
+    ) -> Asset:
         model = navbox.type_name.upper() if navbox.type_name is not None else None
         manufacturer = (
             navbox.type_vendor.lower() if navbox.type_vendor is not None else None
@@ -525,7 +542,7 @@ class EntityParser:
             manufacturer=manufacturer,
             model=model,
             owner=self._navinfo.owner_id,
-            tenant=self._navinfo.tenant_id,
+            tenant=tenant_id,
             software_version=entity.software_revision,
         )
 
