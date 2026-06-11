@@ -130,16 +130,6 @@ class IANAPhysicalClass(IntEnum):
     BATTERY = 14
 
 
-def get_netbox_entities(
-    nav_server_info: NavServerInfo, token: str
-) -> list[Device | VirtualChassis]:
-    """
-    Gets data from all navboxes in a NAV server and parses them into equivalent
-    Netbox entities.
-    """
-    return EntityParser(nav_server_info, token).parse()
-
-
 class EntityParser:
     def __init__(
         self,
