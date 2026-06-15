@@ -130,6 +130,62 @@ class IANAPhysicalClass(IntEnum):
     BATTERY = 14
 
 
+class OrgTenantResolver:
+    """
+    Fetches the NAV organization hierarchy and resolves a tenant ID for a given
+    org based on where it sits relative to the "cnaas" org.
+
+    Rules:
+    - Orgs not in the cnaas subtree are ignored (caller should skip those navboxes).
+    - The "cnaas" org itself maps to the VK's default tenant.
+    - Direct or indirect children of "cnaas" map to a Netbox tenant whose name
+      matches the org ID, falling back to the VK's default tenant if none exists.
+    """
+
+    CNAAS_ORG = "cnaas"
+
+    def __init__(
+        self,
+        nav_api: Api,
+        default_tenant_id: int,
+        netbox_tenants: dict[str, int],
+    ):
+        self._nav_api = nav_api
+        self._default_tenant_id = default_tenant_id
+        self._netbox_tenants = netbox_tenants
+        self._parent_of: dict[str, str | None] = {}  # org_id -> parent org_id
+        self._loaded = False
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        for org in self._nav_api.get("organization/"):
+            self._parent_of[org["id"]] = org.get("parent")
+        self._loaded = True
+
+    def _is_in_cnaas_subtree(self, org_id: str) -> bool:
+        """Walk up the parent chain; return True if cnaas is found."""
+        current = org_id
+        while current is not None:
+            if current == self.CNAAS_ORG:
+                return True
+            current = self._parent_of.get(current)
+        return False
+
+    def resolve(self, org_id: str) -> int | None:
+        """
+        Return the Netbox tenant ID for the given NAV org, or None if the org
+        is not in the cnaas subtree (meaning the navbox should be skipped).
+        """
+        self._load()
+        if not self._is_in_cnaas_subtree(org_id):
+            return None
+        if org_id == self.CNAAS_ORG:
+            return self._default_tenant_id
+        # Child of cnaas: use a tenant matching the org name if one exists.
+        return self._netbox_tenants.get(org_id, self._default_tenant_id)
+
+
 class EntityParser:
     def __init__(
         self,
