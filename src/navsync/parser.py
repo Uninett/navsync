@@ -130,14 +130,60 @@ class IANAPhysicalClass(IntEnum):
     BATTERY = 14
 
 
-def get_netbox_entities(
-    nav_server_info: NavServerInfo, token: str
-) -> list[Device | VirtualChassis]:
+class OrgTenantResolver:
     """
-    Gets data from all navboxes in a NAV server and parses them into equivalent
-    Netbox entities.
+    Fetches the NAV organization hierarchy and resolves a tenant ID for a given
+    org based on where it sits relative to the "cnaas" org.
+
+    Rules:
+    - Orgs not in the cnaas subtree are ignored (caller should skip those navboxes).
+    - The "cnaas" org itself maps to the VK's default tenant.
+    - Direct or indirect children of "cnaas" map to a Netbox tenant whose name
+      matches the org ID, falling back to the VK's default tenant if none exists.
     """
-    return EntityParser(nav_server_info, token).parse()
+
+    CNAAS_ORG = "cnaas"
+
+    def __init__(
+        self,
+        nav_api: Api,
+        default_tenant_id: int,
+        netbox_tenants: dict[str, int],
+    ):
+        self._nav_api = nav_api
+        self._default_tenant_id = default_tenant_id
+        self._netbox_tenants = netbox_tenants
+        self._parent_of: dict[str, str | None] = {}  # org_id -> parent org_id
+        self._loaded = False
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        for org in self._nav_api.get("organization/"):
+            self._parent_of[org["id"]] = org.get("parent")
+        self._loaded = True
+
+    def _is_in_cnaas_subtree(self, org_id: str) -> bool:
+        """Walk up the parent chain; return True if cnaas is found."""
+        current = org_id
+        while current is not None:
+            if current == self.CNAAS_ORG:
+                return True
+            current = self._parent_of.get(current)
+        return False
+
+    def resolve(self, org_id: str) -> int | None:
+        """
+        Return the Netbox tenant ID for the given NAV org, or None if the org
+        is not in the cnaas subtree (meaning the navbox should be skipped).
+        """
+        self._load()
+        if not self._is_in_cnaas_subtree(org_id):
+            return None
+        if org_id == self.CNAAS_ORG:
+            return self._default_tenant_id
+        # Child of cnaas: use a tenant matching the org name if one exists.
+        return self._netbox_tenants.get(org_id, self._default_tenant_id)
 
 
 class EntityParser:
@@ -145,11 +191,17 @@ class EntityParser:
         self,
         nav_server_info: NavServerInfo,
         token: str,
+        netbox_tenants: dict[str, int],
         locations: Optional[dict[str, Location]] = None,
     ):
         self._nav_api = Api(url=nav_server_info.url, token=token)
         self._navinfo = nav_server_info
         self._token = token
+        self._org_tenant_resolver = OrgTenantResolver(
+            nav_api=self._nav_api,
+            default_tenant_id=nav_server_info.tenant_id,
+            netbox_tenants=netbox_tenants,
+        )
 
         if locations is None:
             self._locations: dict[str, Location] = {}
@@ -162,7 +214,9 @@ class EntityParser:
             hierarchy_parser = LocationHierarchyParser(self._navinfo, self._token)
             _, self._locations = hierarchy_parser.get_sites_and_locations()
 
-        schedule_attempt_order: list[Callable[[NavBox], Device | VirtualChassis]] = [
+        schedule_attempt_order: list[
+            Callable[[NavBox, int], Device | VirtualChassis]
+        ] = [
             self._try_parse_standard_virtual_chassis,
             self._try_parse_juniper_virtual_chassis,
             self._try_parse_standard_virtual_router,
@@ -172,6 +226,16 @@ class EntityParser:
 
         netbox_entities: list[Device | VirtualChassis] = []
         for navbox in navboxes:
+            tenant_id = self._org_tenant_resolver.resolve(
+                navbox.organization_identifier
+            )
+            if tenant_id is None:
+                _logger.debug(
+                    f"Navbox {navbox.sysname} belongs to org {navbox.organization_identifier!r} "
+                    "which is not in the cnaas hierarchy. Skipping."
+                )
+                continue
+
             included_attempts = None
             for schedule_attempt in schedule_attempt_order:
                 if (
@@ -180,7 +244,7 @@ class EntityParser:
                 ):
                     continue
                 try:
-                    netbox_entities.append(schedule_attempt(navbox))
+                    netbox_entities.append(schedule_attempt(navbox, tenant_id))
                 except NextAttempt as err:
                     if err.include is not None:
                         if included_attempts is None:
@@ -199,7 +263,9 @@ class EntityParser:
                 _logger.error(f"Could not parse Navbox {navbox.sysname}, skipping")
         return netbox_entities
 
-    def _try_parse_standard_virtual_chassis(self, navbox: NavBox) -> VirtualChassis:
+    def _try_parse_standard_virtual_chassis(
+        self, navbox: NavBox, tenant_id: int
+    ) -> VirtualChassis:
         if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
             raise NextAttempt
 
@@ -245,9 +311,13 @@ class EntityParser:
                 "be wary of missing devices in the parsed Netbox virtual chassis"
             )
 
-        return self._parse_virtual_chassis(navbox, virtual_chassis, physical_chassises)
+        return self._parse_virtual_chassis(
+            navbox, virtual_chassis, physical_chassises, tenant_id
+        )
 
-    def _try_parse_juniper_virtual_chassis(self, navbox: NavBox) -> VirtualChassis:
+    def _try_parse_juniper_virtual_chassis(
+        self, navbox: NavBox, tenant_id: int
+    ) -> VirtualChassis:
         if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
             raise NextAttempt
 
@@ -293,12 +363,16 @@ class EntityParser:
             )
             raise NextAttempt
 
-        return self._parse_virtual_chassis(navbox, virtual_chassis, physical_chassises)
+        return self._parse_virtual_chassis(
+            navbox, virtual_chassis, physical_chassises, tenant_id
+        )
 
-    def _try_parse_standard_virtual_router(self, navbox: NavBox) -> None:
+    def _try_parse_standard_virtual_router(
+        self, navbox: NavBox, tenant_id: int
+    ) -> None:
         raise NextAttempt
 
-    def _try_parse_proprietary_mib(self, navbox: NavBox) -> None:
+    def _try_parse_proprietary_mib(self, navbox: NavBox, tenant_id: int) -> None:
         if navbox.category not in ("GW", "GSW", "SW", "EDGE"):
             raise NextAttempt
         if len(navbox.entities) != 1:
@@ -317,7 +391,7 @@ class EntityParser:
         )
         raise NextAttempt([])
 
-    def _try_parse_physical_chassis(self, navbox: NavBox) -> Device:
+    def _try_parse_physical_chassis(self, navbox: NavBox, tenant_id: int) -> Device:
         chassis = None
         if navbox.entities:
             physical_chassises = [
@@ -341,7 +415,7 @@ class EntityParser:
                 f"Failed to find entities for Navbox {navbox.sysname}. Syncing without asset."
             )
         try:
-            return self._parse_device(navbox, chassis)
+            return self._parse_device(navbox, tenant_id, chassis)
         except ValueError as err:
             _logger.warning(
                 f"Failed to parse Navbox {navbox.sysname} as physical chassis: {err}"
@@ -353,6 +427,7 @@ class EntityParser:
         navbox: NavBox,
         virtual_chassis: NavBoxEntity,
         physical_chassises: list[NavBoxEntity],
+        tenant_id: int,
     ) -> VirtualChassis:
         if not physical_chassises:
             _logger.warning(
@@ -376,6 +451,7 @@ class EntityParser:
             try:
                 device = self._parse_device(
                     navbox,
+                    tenant_id,
                     physical_chassis,
                     position=physical_chassis.parent_relpos,
                 )
@@ -389,13 +465,14 @@ class EntityParser:
         return VirtualChassis(
             name=navbox.sysname,
             tags=["navsync"],
-            tenant=self._navinfo.tenant_id,
+            tenant=tenant_id,
             devices=devices,
         )
 
     def _parse_device(
         self,
         navbox: NavBox,
+        tenant_id: int,
         physical_chassis: Optional[NavBoxEntity] = None,
         position: Optional[int] = None,
     ) -> Device:
@@ -404,7 +481,7 @@ class EntityParser:
         else:
             sysname = navbox.sysname
         if physical_chassis:
-            asset = self._parse_asset(navbox, physical_chassis)
+            asset = self._parse_asset(navbox, physical_chassis, tenant_id=tenant_id)
             is_up = physical_chassis.gone_since is None and navbox.up
         else:
             asset = None
@@ -419,7 +496,7 @@ class EntityParser:
         return Device(
             name=sysname,
             tags=["navsync"],
-            tenant=self._navinfo.tenant_id,
+            tenant=tenant_id,
             manufacturer=manufacturer,
             model=model,
             asset=asset,
@@ -445,7 +522,9 @@ class EntityParser:
         else:
             return "unknown"
 
-    def _parse_asset(self, navbox: NavBox, entity: NavBoxEntity) -> Asset:
+    def _parse_asset(
+        self, navbox: NavBox, entity: NavBoxEntity, tenant_id: int
+    ) -> Asset:
         model = navbox.type_name.upper() if navbox.type_name is not None else None
         manufacturer = (
             navbox.type_vendor.lower() if navbox.type_vendor is not None else None
@@ -463,7 +542,7 @@ class EntityParser:
             manufacturer=manufacturer,
             model=model,
             owner=self._navinfo.owner_id,
-            tenant=self._navinfo.tenant_id,
+            tenant=tenant_id,
             software_version=entity.software_revision,
         )
 
