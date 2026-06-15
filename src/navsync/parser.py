@@ -191,11 +191,17 @@ class EntityParser:
         self,
         nav_server_info: NavServerInfo,
         token: str,
+        netbox_tenants: dict[str, int],
         locations: Optional[dict[str, Location]] = None,
     ):
         self._nav_api = Api(url=nav_server_info.url, token=token)
         self._navinfo = nav_server_info
         self._token = token
+        self._org_tenant_resolver = OrgTenantResolver(
+            nav_api=self._nav_api,
+            default_tenant_id=nav_server_info.tenant_id,
+            netbox_tenants=netbox_tenants,
+        )
 
         if locations is None:
             self._locations: dict[str, Location] = {}
@@ -218,6 +224,16 @@ class EntityParser:
 
         netbox_entities: list[Device | VirtualChassis] = []
         for navbox in navboxes:
+            tenant_id = self._org_tenant_resolver.resolve(
+                navbox.organization_identifier
+            )
+            if tenant_id is None:
+                _logger.debug(
+                    f"Navbox {navbox.sysname} belongs to org {navbox.organization_identifier!r} "
+                    "which is not in the cnaas hierarchy. Skipping."
+                )
+                continue
+
             included_attempts = None
             for schedule_attempt in schedule_attempt_order:
                 if (

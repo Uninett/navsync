@@ -158,6 +158,7 @@ class Syncer:
         Syncs all navboxes from all NAV server instances found on the Netbox
         server to Netbox
         """
+        self.tenants = self._get_upstream_tenants()
         nav_data = self._fetch_nav_data()
         assets = {
             device.name: device.asset
@@ -180,7 +181,6 @@ class Syncer:
         )
         self.upstream_device_types_by_model = self._get_upstream_device_types_by_model()
         self.upstream_manufacturers = self._get_upstream_manufacturers()
-        self.tenants = self._get_upstream_tenants()
 
         self._sync_sites_and_locations(nav_data.sites)
         self._sync_devices(nav_data.devices)
@@ -1096,7 +1096,12 @@ class Syncer:
             # Sleep to avoid issues with the `nbf` claim.
             time.sleep(1)
             all_entities.extend(
-                EntityParser(nav_server, token, locations=server_locations).parse()
+                EntityParser(
+                    nav_server,
+                    token,
+                    locations=server_locations,
+                    netbox_tenants={name: t.id for name, t in self.tenants.items()},
+                ).parse()
             )
 
         result.chassis, result.devices = self._get_virtual_chassis_and_devices(
@@ -1214,6 +1219,7 @@ class Syncer:
                 "/api/1/netboxentity",
                 "/api/1/location",
                 "/api/1/room",
+                "/api/1/organization",
             ],
             "write": False,
         }
