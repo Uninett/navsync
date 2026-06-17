@@ -4,6 +4,9 @@ from enum import IntEnum
 from typing import Callable, Literal, NewType, Optional, Self, Sequence
 from urllib.parse import urljoin
 
+from requests.exceptions import RequestException
+
+from navsync.geocoder import geocode_address
 from navsync.nav import Api, NavBox, NavBoxEntity
 from navsync.utils import NavServerInfo, sanitize_slug
 
@@ -653,6 +656,13 @@ class LocationHierarchyParser:
         name = location_data["id"]
         if name in self._sites:
             return self._sites[name]
+        physical_address = (location_data.get("data") or {}).get("addr")
+        try:
+            coords = geocode_address(physical_address) if physical_address else None
+        except RequestException as e:
+            _logger.error("Could not get geocode address: %s", e)
+            coords = None
+
         site = Site(
             name=name,
             tags=["navsync"],
@@ -660,7 +670,9 @@ class LocationHierarchyParser:
             tenant=self._navinfo.tenant_id,
             locations={},
             description=location_data.get("description"),
-            physical_address=(location_data.get("data") or {}).get("addr"),
+            physical_address=physical_address,
+            latitude=coords[0] if coords else None,
+            longitude=coords[1] if coords else None,
             url=urljoin(self._navinfo.url, f"search/location/{name}/"),
         )
         self._sites[name] = site
