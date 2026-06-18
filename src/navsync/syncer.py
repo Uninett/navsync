@@ -1089,7 +1089,6 @@ class Syncer:
                 sites[site.name] = site
             result.locations.extend(server_locations.values())
 
-            token = self._generate_nav_token(aud=nav_server.url)
             # Sleep to avoid issues with the `nbf` claim.
             time.sleep(1)
             all_entities.extend(
