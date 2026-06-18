@@ -724,7 +724,6 @@ class Syncer:
                 self._update_location(
                     location,
                     upstream_location,
-                    upstream_site,
                     parent_id,
                 )
             else:
@@ -781,7 +780,6 @@ class Syncer:
         self,
         location: Location,
         upstream_location: Record,
-        upstream_site: Record,
         parent_id: Optional[int] = None,
     ):
         upstream_location.tenant = location.tenant
@@ -799,7 +797,6 @@ class Syncer:
 
         upstream_location.tags = tag_ids
         upstream_location.status = location.status
-        upstream_location.site = upstream_site.id
         if location.url is not None:
             upstream_location.custom_fields["nav_url"] = location.url
 
