@@ -788,10 +788,7 @@ class Syncer:
         if not upstream_location.description and location.description:
             upstream_location.description = location.description
 
-        if parent_id is not None:
-            upstream_location.parent = parent_id
-        else:
-            upstream_location.parent = None
+        upstream_location.parent = parent_id
 
         tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
         upstream_location_tag_ids = self._get_tag_ids_from_tags(upstream_location.tags)
