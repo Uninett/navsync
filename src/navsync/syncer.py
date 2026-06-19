@@ -695,7 +695,9 @@ class Syncer:
         """Syncs sites and their nested location hierarchies to Netbox.
         Returns a map of nav_server -> location_name -> upstream Record for use by device syncing."""
         upstream_sites = self._get_upstream_sites()
-        upstream_locations = self._get_upstream_locations()
+        upstream_locations_by_slug, upstream_locations_by_name = (
+            self._get_upstream_locations()
+        )
         flat_locations: dict[str, dict[NameStr, Record]] = {}
 
         for site in sites:
@@ -714,7 +716,8 @@ class Syncer:
             self._sync_location_tree(
                 site.locations.values(),
                 upstream_site,
-                upstream_locations,
+                upstream_locations_by_slug,
+                upstream_locations_by_name,
                 flat_locations,
             )
 
@@ -724,14 +727,23 @@ class Syncer:
         self,
         locations: Sequence[Location],
         upstream_site: Record,
-        upstream_locations: dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]],
+        upstream_locations_by_slug: dict[
+            SlugStr, dict[SlugStr, dict[Optional[int], Record]]
+        ],
+        upstream_locations_by_name: dict[
+            SlugStr, dict[NameStr, dict[Optional[int], Record]]
+        ],
         flat_locations: dict[str, dict[NameStr, Record]],
         parent_id: Optional[int] = None,
     ):
         """Recursively syncs a location tree for a site, creating parents before children."""
         for location in locations:
             upstream_location = (
-                upstream_locations.get(upstream_site.slug, {})
+                upstream_locations_by_name.get(upstream_site.slug, {})
+                .get(location.name, {})
+                .get(parent_id)
+            ) or (
+                upstream_locations_by_slug.get(upstream_site.slug, {})
                 .get(location.slug, {})
                 .get(parent_id)
             )
@@ -749,9 +761,12 @@ class Syncer:
                 )
                 if upstream_location is None:
                     continue
-                upstream_locations.setdefault(upstream_site.slug, {}).setdefault(
-                    location.slug, {}
-                )[parent_id] = upstream_location
+                upstream_locations_by_slug.setdefault(
+                    upstream_site.slug, {}
+                ).setdefault(location.slug, {})[parent_id] = upstream_location
+                upstream_locations_by_name.setdefault(
+                    upstream_site.slug, {}
+                ).setdefault(location.name, {})[parent_id] = upstream_location
 
             flat_locations.setdefault(location.nav_server, {})[location.name] = (
                 upstream_location
@@ -761,7 +776,8 @@ class Syncer:
                 self._sync_location_tree(
                     location.child_locations.values(),
                     upstream_site,
-                    upstream_locations,
+                    upstream_locations_by_slug,
+                    upstream_locations_by_name,
                     flat_locations,
                     upstream_location.id,
                 )
@@ -975,15 +991,22 @@ class Syncer:
 
     def _get_upstream_locations(
         self,
-    ) -> dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]]:
-        """Returns dict mapping site slug -> location slug -> parent id -> Record."""
-        locations = {}
+    ) -> tuple[
+        dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]],
+        dict[SlugStr, dict[NameStr, dict[Optional[int], Record]]],
+    ]:
+        """Returns (by_slug, by_name): site slug -> location slug/name -> parent id -> Record."""
+        by_slug: dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]] = {}
+        by_name: dict[SlugStr, dict[NameStr, dict[Optional[int], Record]]] = {}
         for location in self.netbox_api.dcim.locations.all():
             parent_id = location.parent.id if location.parent else None
-            locations.setdefault(location.site.slug, {}).setdefault(location.slug, {})[
+            by_slug.setdefault(location.site.slug, {}).setdefault(location.slug, {})[
                 parent_id
             ] = location
-        return locations
+            by_name.setdefault(location.site.slug, {}).setdefault(location.name, {})[
+                parent_id
+            ] = location
+        return by_slug, by_name
 
     def _get_upstream_devices(self) -> dict[NameStr, Record]:
         """Returns dict mapping name to device"""
