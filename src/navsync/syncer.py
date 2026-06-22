@@ -182,8 +182,8 @@ class Syncer:
         self.upstream_device_types_by_model = self._get_upstream_device_types_by_model()
         self.upstream_manufacturers = self._get_upstream_manufacturers()
 
-        self._sync_sites_and_locations(nav_data.sites)
-        self._sync_devices(nav_data.devices)
+        flat_locations = self._sync_sites_and_locations(nav_data.sites)
+        self._sync_devices(nav_data.devices, flat_locations)
         self._sync_assets(assets)
 
         self._sync_virtual_chassis(nav_data.chassis)
@@ -484,10 +484,13 @@ class Syncer:
                 return asset
         return None
 
-    def _sync_devices(self, devices: dict[NameStr, Device]):
+    def _sync_devices(
+        self,
+        devices: dict[NameStr, Device],
+        flat_locations: dict[str, dict[NameStr, Record]],
+    ):
         upstream_devices_by_name = self._get_upstream_devices()
         upstream_sites = self._get_upstream_sites()
-        upstream_locations = self._get_upstream_locations()
         upstream_device_roles_by_name = self._get_upstream_device_roles()
 
         self._decommission_all_missing_devices(
@@ -503,7 +506,7 @@ class Syncer:
                 raise ValueError(
                     f"Could not find site {device.location.site.name}. It should have been created during `_sync_sites_and_locations`"
                 )
-            upstream_location = upstream_locations.get(upstream_site.name, {}).get(
+            upstream_location = flat_locations.get(device.nav_server, {}).get(
                 device.location.name
             )
             upstream_device_role = upstream_device_roles_by_name.get(device.role)
@@ -686,10 +689,16 @@ class Syncer:
             )
         return upstream_manufacturer
 
-    def _sync_sites_and_locations(self, sites: Sequence[Site]):
-        """Syncs sites and their nested location hierarchies to Netbox."""
+    def _sync_sites_and_locations(
+        self, sites: Sequence[Site]
+    ) -> dict[str, dict[NameStr, Record]]:
+        """Syncs sites and their nested location hierarchies to Netbox.
+        Returns a map of nav_server -> location_name -> upstream Record for use by device syncing."""
         upstream_sites = self._get_upstream_sites()
-        upstream_locations = self._get_upstream_locations()
+        upstream_locations_by_slug, upstream_locations_by_name = (
+            self._get_upstream_locations()
+        )
+        flat_locations: dict[str, dict[NameStr, Record]] = {}
 
         for site in sites:
             upstream_site = self._get_upstream_site(upstream_sites, site)
@@ -705,26 +714,43 @@ class Syncer:
                 upstream_sites.append(upstream_site)
 
             self._sync_location_tree(
-                site.locations.values(), upstream_site, upstream_locations
+                site.locations.values(),
+                upstream_site,
+                upstream_locations_by_slug,
+                upstream_locations_by_name,
+                flat_locations,
             )
+
+        return flat_locations
 
     def _sync_location_tree(
         self,
         locations: Sequence[Location],
         upstream_site: Record,
-        upstream_locations: dict[NameStr, dict[NameStr, Record]],
+        upstream_locations_by_slug: dict[
+            SlugStr, dict[SlugStr, dict[Optional[int], Record]]
+        ],
+        upstream_locations_by_name: dict[
+            SlugStr, dict[NameStr, dict[Optional[int], Record]]
+        ],
+        flat_locations: dict[str, dict[NameStr, Record]],
         parent_id: Optional[int] = None,
     ):
         """Recursively syncs a location tree for a site, creating parents before children."""
         for location in locations:
-            upstream_location = upstream_locations.get(upstream_site.name, {}).get(
-                location.name
+            upstream_location = (
+                upstream_locations_by_name.get(upstream_site.slug, {})
+                .get(location.name, {})
+                .get(parent_id)
+            ) or (
+                upstream_locations_by_slug.get(upstream_site.slug, {})
+                .get(location.slug, {})
+                .get(parent_id)
             )
             if upstream_location:
                 self._update_location(
                     location,
                     upstream_location,
-                    upstream_site,
                     parent_id,
                 )
             else:
@@ -735,15 +761,24 @@ class Syncer:
                 )
                 if upstream_location is None:
                     continue
-                upstream_locations.setdefault(upstream_site.name, {})[location.name] = (
-                    upstream_location
-                )
+                upstream_locations_by_slug.setdefault(
+                    upstream_site.slug, {}
+                ).setdefault(location.slug, {})[parent_id] = upstream_location
+                upstream_locations_by_name.setdefault(
+                    upstream_site.slug, {}
+                ).setdefault(location.name, {})[parent_id] = upstream_location
+
+            flat_locations.setdefault(location.nav_server, {})[location.name] = (
+                upstream_location
+            )
 
             if location.child_locations:
                 self._sync_location_tree(
                     location.child_locations.values(),
                     upstream_site,
-                    upstream_locations,
+                    upstream_locations_by_slug,
+                    upstream_locations_by_name,
+                    flat_locations,
                     upstream_location.id,
                 )
 
@@ -781,17 +816,13 @@ class Syncer:
         self,
         location: Location,
         upstream_location: Record,
-        upstream_site: Record,
         parent_id: Optional[int] = None,
     ):
         upstream_location.tenant = location.tenant
         if not upstream_location.description and location.description:
             upstream_location.description = location.description
 
-        if parent_id is not None:
-            upstream_location.parent = parent_id
-        else:
-            upstream_location.parent = None
+        upstream_location.parent = parent_id
 
         tag_ids = self._convert_tag_names_to_ids(location.tags, self.tags)
         upstream_location_tag_ids = self._get_tag_ids_from_tags(upstream_location.tags)
@@ -802,7 +833,6 @@ class Syncer:
 
         upstream_location.tags = tag_ids
         upstream_location.status = location.status
-        upstream_location.site = upstream_site.id
         if location.url is not None:
             upstream_location.custom_fields["nav_url"] = location.url
 
@@ -959,14 +989,24 @@ class Syncer:
             for device_role in self.netbox_api.dcim.device_roles.all()
         }
 
-    def _get_upstream_locations(self) -> dict[NameStr, dict[NameStr, Record]]:
-        """Returns dict of dicts mapping sites and location names to location Records. The first dict maps site name to a dict, and the second dict maps location name to location Record"""
-        locations = {}
+    def _get_upstream_locations(
+        self,
+    ) -> tuple[
+        dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]],
+        dict[SlugStr, dict[NameStr, dict[Optional[int], Record]]],
+    ]:
+        """Returns (by_slug, by_name): site slug -> location slug/name -> parent id -> Record."""
+        by_slug: dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]] = {}
+        by_name: dict[SlugStr, dict[NameStr, dict[Optional[int], Record]]] = {}
         for location in self.netbox_api.dcim.locations.all():
-            if location.site.name not in locations:
-                locations[location.site.name] = {}
-            locations[location.site.name][location.name] = location
-        return locations
+            parent_id = location.parent.id if location.parent else None
+            by_slug.setdefault(location.site.slug, {}).setdefault(location.slug, {})[
+                parent_id
+            ] = location
+            by_name.setdefault(location.site.slug, {}).setdefault(location.name, {})[
+                parent_id
+            ] = location
+        return by_slug, by_name
 
     def _get_upstream_devices(self) -> dict[NameStr, Record]:
         """Returns dict mapping name to device"""
@@ -1092,7 +1132,6 @@ class Syncer:
                 sites[site.name] = site
             result.locations.extend(server_locations.values())
 
-            token = self._generate_nav_token(aud=nav_server.url)
             # Sleep to avoid issues with the `nbf` claim.
             time.sleep(1)
             all_entities.extend(

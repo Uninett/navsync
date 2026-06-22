@@ -29,6 +29,7 @@ class Site:
     slug: str
     tenant: int
     locations: dict[str, "Location"]
+    nav_server: str
     status: Literal["active", "decommissioning", "planned", "retired", "staging"] = (
         "active"
     )
@@ -50,6 +51,7 @@ class Location:
     slug: str
     tenant: int
     site: Site
+    nav_server: str
     child_locations: Optional[dict[str, "Location"]] = None
     parent_location: Optional["Location"] = None
     description: str | None = None
@@ -71,6 +73,7 @@ class Asset:
     manufacturer: ManufacturerStr
     model: ModelStr
     serial: SerialStr
+    nav_server: str
     status: Literal["stored", "used", "retired"] = "used"
     contact: int | str | None = None
     navbox: NavBox | None = None
@@ -90,6 +93,7 @@ class Device:
     ]
     manufacturer: ManufacturerStr
     model: ModelStr
+    nav_server: str
     status: Literal[
         "active",
         "offline",
@@ -113,6 +117,7 @@ class VirtualChassis:
     tags: list[str]
     tenant: int
     devices: list[Device]
+    nav_server: str
     navbox: NavBox | None = None
 
 
@@ -470,6 +475,7 @@ class EntityParser:
             tags=["navsync"],
             tenant=tenant_id,
             devices=devices,
+            nav_server=self._navinfo.url,
         )
 
     def _parse_device(
@@ -502,6 +508,7 @@ class EntityParser:
             tenant=tenant_id,
             manufacturer=manufacturer,
             model=model,
+            nav_server=self._navinfo.url,
             asset=asset,
             location=self._locations[navbox.room_name],
             role=self._get_device_role_from_navbox(navbox),
@@ -546,6 +553,7 @@ class EntityParser:
             model=model,
             owner=self._navinfo.owner_id,
             tenant=tenant_id,
+            nav_server=self._navinfo.url,
             software_version=entity.software_revision,
         )
 
@@ -633,6 +641,7 @@ class LocationHierarchyParser:
                     slug=sanitize_slug(name),
                     tenant=self._tenant_id,
                     site=site,
+                    nav_server=self._navinfo.url,
                     parent_location=parent_location,
                     child_locations={},
                     description=nav_location.get("description"),
@@ -669,6 +678,7 @@ class LocationHierarchyParser:
             slug=sanitize_slug(name),
             tenant=self._navinfo.tenant_id,
             locations={},
+            nav_server=self._navinfo.url,
             description=location_data.get("description"),
             physical_address=physical_address,
             latitude=coords[0] if coords else None,
