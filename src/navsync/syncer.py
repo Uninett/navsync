@@ -1023,11 +1023,7 @@ class Syncer:
         Returns None if there is no match
         """
         for upstream_site in upstream_sites:
-            if (
-                upstream_site.slug == site.slug
-                or upstream_site.physical_address == site.physical_address
-                or upstream_site.name == site.name
-            ):
+            if upstream_site.slug == site.slug or upstream_site.name == site.name:
                 return upstream_site
 
     def _register_devices_as_members_of_vc(
