@@ -417,7 +417,9 @@ class Syncer:
         if upstream_asset.updates():
             # There is a problem where netbox sometimes returns a 500 error
             # when you save an asset even though the asset is saved successfully.
-            _logger.debug(f"Updating asset {upstream_asset.serial}")
+            _logger.debug(
+                f"Updating asset {upstream_asset.serial}: {upstream_asset.updates()}"
+            )
             try:
                 upstream_asset.save()
             except RequestError as e:
@@ -634,7 +636,9 @@ class Syncer:
             upstream_device.device_type = upstream_device_type.id
 
         if upstream_device.updates():
-            _logger.debug(f"Updating device {upstream_device.name}")
+            _logger.debug(
+                f"Updating device {upstream_device.name}: {upstream_device.updates()}"
+            )
             try:
                 upstream_device.save()
             except RequestError as e:
@@ -836,7 +840,9 @@ class Syncer:
             upstream_location.custom_fields["nav_url"] = location.url
 
         if upstream_location.updates():
-            _logger.debug(f"Updating location {upstream_location.name}")
+            _logger.debug(
+                f"Updating location {upstream_location.name}: {upstream_location.updates()}"
+            )
             try:
                 upstream_location.save()
             except RequestError as e:
@@ -879,7 +885,9 @@ class Syncer:
         upstream_site.tags = tag_ids
         upstream_site.status = site.status
         if upstream_site.updates():
-            _logger.debug(f"Updating site {upstream_site.name}")
+            _logger.debug(
+                f"Updating site {upstream_site.name}: {upstream_site.updates()}"
+            )
             try:
                 upstream_site.save()
             except RequestError as e:
