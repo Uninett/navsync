@@ -327,7 +327,9 @@ class Syncer:
         tag_ids.sort()
         upstream_virtual_chassis.tags = tag_ids
         if upstream_virtual_chassis.updates():
-            _logger.debug(f"Updating virtual chassis {upstream_virtual_chassis.name}")
+            _logger.debug(
+                f"Updating virtual chassis {upstream_virtual_chassis.name}: {upstream_virtual_chassis.updates()}"
+            )
             try:
                 upstream_virtual_chassis.save()
             except RequestError as e:
