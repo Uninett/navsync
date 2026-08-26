@@ -287,7 +287,6 @@ class Syncer:
         )
         new_virtual_chassis = {
             "name": virtual_chassis.name,
-            "tenant": virtual_chassis.tenant,
             "tags": tag_ids,
         }
         _logger.debug(f"Creating new virtual chassis {virtual_chassis.name}")
@@ -313,8 +312,6 @@ class Syncer:
         self._register_devices_as_members_of_vc(
             virtual_chassis.devices, upstream_devices, upstream_virtual_chassis
         )
-        if virtual_chassis.tenant:
-            upstream_virtual_chassis.tenant = virtual_chassis.tenant
         tag_ids = self._convert_tag_names_to_ids(virtual_chassis.tags, self.tags)
         upstream_virtual_chassis_tag_ids = self._get_tag_ids_from_tags(
             upstream_virtual_chassis.tags
