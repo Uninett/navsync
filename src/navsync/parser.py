@@ -115,7 +115,6 @@ class VirtualChassis:
 
     name: str
     tags: list[str]
-    tenant: int
     devices: list[Device]
     nav_server: str
     navbox: NavBox | None = None
@@ -473,7 +472,6 @@ class EntityParser:
         return VirtualChassis(
             name=navbox.sysname,
             tags=["navsync"],
-            tenant=tenant_id,
             devices=devices,
             nav_server=self._navinfo.url,
         )
