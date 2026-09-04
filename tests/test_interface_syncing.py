@@ -186,3 +186,230 @@ class TestSyncIpAddress:
 
         assert result is None
         syncer.netbox_api.ipam.ip_addresses.create.assert_not_called()
+
+
+class TestSetPrimaryIpAddress:
+    def test_ipv4_address_should_become_primary_ip4(self):
+        syncer = make_syncer()
+        device = MagicMock(name="sw1")
+        device.primary_ip4 = None
+        device.primary_ip6 = None
+        ip_address = MagicMock(id=55)
+        ip_address.address = "10.0.0.1/32"
+
+        syncer._set_primary_ip_address(device, ip_address)
+
+        assert device.primary_ip4 == 55
+        assert device.primary_ip6 is None
+        device.save.assert_called_once()
+
+    def test_ipv6_address_should_become_primary_ip6(self):
+        syncer = make_syncer()
+        device = MagicMock(name="sw1")
+        device.primary_ip4 = None
+        device.primary_ip6 = None
+        ip_address = MagicMock(id=66)
+        ip_address.address = "2001:db8::1/128"
+
+        syncer._set_primary_ip_address(device, ip_address)
+
+        assert device.primary_ip6 == 66
+        assert device.primary_ip4 is None
+
+    def test_already_primary_address_should_not_be_saved_again(self):
+        syncer = make_syncer()
+        device = MagicMock(name="sw1")
+        ip_address = MagicMock(id=55)
+        ip_address.address = "10.0.0.1/32"
+        device.primary_ip4 = MagicMock(id=55)
+
+        syncer._set_primary_ip_address(device, ip_address)
+
+        device.save.assert_not_called()
+
+    def test_a_different_primary_address_should_be_replaced(self):
+        syncer = make_syncer()
+        device = MagicMock(name="sw1")
+        device.primary_ip4 = MagicMock(id=99)
+        ip_address = MagicMock(id=55)
+        ip_address.address = "10.0.0.1/32"
+
+        syncer._set_primary_ip_address(device, ip_address)
+
+        assert device.primary_ip4 == 55
+        device.save.assert_called_once()
+
+    def test_unparseable_address_should_not_be_set_as_primary(self):
+        syncer = make_syncer()
+        device = MagicMock(name="sw1")
+        device.primary_ip4 = None
+        ip_address = MagicMock(id=55)
+        ip_address.address = "not-an-address"
+
+        syncer._set_primary_ip_address(device, ip_address)
+
+        assert device.primary_ip4 is None
+        device.save.assert_not_called()
+
+    def test_failed_save_should_not_raise(self):
+        from pynetbox.core.query import RequestError
+
+        syncer = make_syncer()
+        device = MagicMock(name="sw1")
+        device.primary_ip4 = None
+        response = MagicMock()
+        response.status_code = 400
+        response.json.return_value = {"primary_ip4": ["invalid"]}
+        device.save.side_effect = RequestError(response)
+        ip_address = MagicMock(id=55)
+        ip_address.address = "10.0.0.1/32"
+
+        syncer._set_primary_ip_address(device, ip_address)
+
+        device.save.assert_called_once()
+
+
+class TestReleasePrimaryIpAddress:
+    def test_the_holding_device_should_have_its_primary_ip_cleared(self):
+        syncer = make_syncer()
+        ip_address = MagicMock(id=55)
+        ip_address.address = "158.38.1.13/32"
+        holder = MagicMock()
+        holder.name = "gw-old"
+        holder.tags = []
+        syncer.netbox_api.dcim.devices.get.return_value = holder
+
+        syncer._release_primary_ip_address(ip_address)
+
+        assert holder.primary_ip4 is None
+        holder.save.assert_called_once()
+
+    def test_the_holding_device_should_be_tagged_navsync(self):
+        """navsync has modified the device, so it marks it as its own"""
+        syncer = make_syncer()
+        ip_address = MagicMock(id=55)
+        ip_address.address = "158.38.1.13/32"
+        holder = MagicMock()
+        holder.name = "gw-old"
+        holder.tags = []
+        syncer.netbox_api.dcim.devices.get.return_value = holder
+
+        syncer._release_primary_ip_address(ip_address)
+
+        assert holder.tags == [syncer.tags["navsync"]]
+
+    def test_existing_tags_on_the_holding_device_should_be_kept(self):
+        syncer = make_syncer()
+        ip_address = MagicMock(id=55)
+        ip_address.address = "158.38.1.13/32"
+        holder = MagicMock()
+        holder.name = "gw-old"
+        holder.tags = [MagicMock(id=7)]
+        syncer.netbox_api.dcim.devices.get.return_value = holder
+
+        syncer._release_primary_ip_address(ip_address)
+
+        assert holder.tags == [syncer.tags["navsync"], 7]
+
+    def test_only_the_matching_address_family_should_be_queried(self):
+        """An IPv4 address can only ever be in primary_ip4"""
+        syncer = make_syncer()
+        syncer.netbox_api.dcim.devices.get.return_value = None
+        ip_address = MagicMock(id=55)
+        ip_address.address = "158.38.1.13/32"
+
+        syncer._release_primary_ip_address(ip_address)
+
+        assert syncer.netbox_api.dcim.devices.get.call_args.kwargs == {
+            "primary_ip4_id": 55
+        }
+
+    def test_an_ipv6_address_should_only_query_primary_ip6(self):
+        syncer = make_syncer()
+        syncer.netbox_api.dcim.devices.get.return_value = None
+        ip_address = MagicMock(id=66)
+        ip_address.address = "2001:700::1/128"
+
+        syncer._release_primary_ip_address(ip_address)
+
+        assert syncer.netbox_api.dcim.devices.get.call_args.kwargs == {
+            "primary_ip6_id": 66
+        }
+
+    def test_an_unparseable_address_should_not_be_queried_at_all(self):
+        syncer = make_syncer()
+        ip_address = MagicMock(id=55)
+        ip_address.address = "not-an-address"
+
+        syncer._release_primary_ip_address(ip_address)
+
+        syncer.netbox_api.dcim.devices.get.assert_not_called()
+
+    def test_nothing_should_be_saved_when_no_device_holds_the_address(self):
+        syncer = make_syncer()
+        syncer.netbox_api.dcim.devices.get.return_value = None
+        ip_address = MagicMock(id=55)
+        ip_address.address = "158.38.1.13/32"
+
+        syncer._release_primary_ip_address(ip_address)
+
+        syncer.netbox_api.dcim.devices.get.assert_called_once()
+
+    def test_a_failed_clear_should_not_raise(self):
+        from pynetbox.core.query import RequestError
+
+        syncer = make_syncer()
+        ip_address = MagicMock(id=55)
+        ip_address.address = "158.38.1.13/32"
+        response = MagicMock()
+        response.status_code = 400
+        response.json.return_value = {"primary_ip4": ["nope"]}
+        holder = MagicMock()
+        holder.name = "gw-old"
+        holder.tags = []
+        holder.save.side_effect = RequestError(response)
+        syncer.netbox_api.dcim.devices.get.return_value = holder
+
+        syncer._release_primary_ip_address(ip_address)
+
+        holder.save.assert_called_once()
+
+    def test_reassignment_should_release_the_primary_ip_first(self):
+        """Netbox refuses to reassign an address that is still a primary IP"""
+        syncer = make_syncer()
+        syncer._get_tag_ids_from_tags = lambda tags: []
+        interface = upstream_interface()
+        existing = MagicMock()
+        existing.address = "158.38.1.13/32"
+        existing.assigned_object_type = "dcim.interface"
+        existing.assigned_object_id = 999  # on some other interface
+        existing.tags = []
+        existing.updates.return_value = {"assigned_object_id": interface.id}
+        released = []
+        syncer._release_primary_ip_address = lambda ip: released.append(ip)
+
+        syncer._sync_ip_address(
+            nav_address("158.38.1.13/32"), interface, {"158.38.1.13": existing}
+        )
+
+        assert released == [existing], "released before being reassigned"
+        assert existing.assigned_object_id == interface.id
+
+    def test_an_already_assigned_address_should_not_be_released(self):
+        syncer = make_syncer()
+        syncer._get_tag_ids_from_tags = lambda tags: []
+        interface = upstream_interface()
+        existing = MagicMock()
+        existing.address = "158.38.1.13/32"
+        existing.assigned_object_type = "dcim.interface"
+        existing.assigned_object_id = interface.id
+        existing.tags = []
+        existing.updates.return_value = {}
+        released = []
+        syncer._release_primary_ip_address = lambda ip: released.append(ip)
+
+        syncer._sync_ip_address(
+            nav_address("158.38.1.13/32"), interface, {"158.38.1.13": existing}
+        )
+
+        assert released == [], "no need to release an address already in place"

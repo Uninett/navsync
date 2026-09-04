@@ -1,5 +1,6 @@
 import logging
 from datetime import timedelta
+from ipaddress import ip_address
 from typing import Optional, Sequence, Union
 
 import pynetbox.core.api as netbox
@@ -447,10 +448,12 @@ class Syncer:
     def _sync_interfaces_and_ip_addresses(self, devices: dict[NameStr, Device]):
         """
         Syncs every interface that NAV reports an IP address for, along with all
-        those IP addresses.
+        those IP addresses, and registers the device's management IP address as
+        its primary IP address.
 
-        Netbox only allows an IP address to be assigned to an interface, so the
-        interfaces are created (or updated) before their addresses.
+        Netbox requires an IP address to be assigned to an interface on a
+        device before it can be used as that device's primary IP address, so
+        the interfaces are created (or updated) first.
         """
         devices_with_interfaces = {
             name: device for name, device in devices.items() if device.interfaces
@@ -480,9 +483,16 @@ class Syncer:
                     continue
 
                 for address in interface.addresses:
-                    self._sync_ip_address(
+                    upstream_ip_address = self._sync_ip_address(
                         address, upstream_interface, upstream_ip_addresses
                     )
+                    if upstream_ip_address is None:
+                        continue
+
+                    if address.is_primary:
+                        self._set_primary_ip_address(
+                            upstream_device, upstream_ip_address
+                        )
 
     def _sync_interface(
         self,
@@ -637,6 +647,9 @@ class Syncer:
             and upstream_ip_address.assigned_object_id == upstream_interface.id
         )
         if not already_assigned:
+            # Netbox refuses to reassign an address that is designated as some
+            # device's primary IP, so that designation has to go first
+            self._release_primary_ip_address(upstream_ip_address)
             _logger.debug(
                 f"Reassigning IP address {address.address} to interface "
                 f"{upstream_interface.name} on device {upstream_interface.device.name}"
@@ -666,6 +679,102 @@ class Syncer:
                 )
                 return None
         return upstream_ip_address
+
+    @staticmethod
+    def _primary_ip_field(upstream_ip_address: Record) -> Optional[str]:
+        """
+        Returns the name of the device field an IP address of this version can
+        be the primary IP in, or None if the version cannot be determined.
+
+        Netbox keeps the two address families in separate fields, and an
+        address can only ever occupy the one matching its own version.
+        """
+        address = str(upstream_ip_address.address)
+        try:
+            version = ip_address(address.split("/")[0]).version
+        except ValueError:
+            _logger.error(f"Could not determine IP version of {address}")
+            return None
+        return "primary_ip4" if version == 4 else "primary_ip6"
+
+    def _release_primary_ip_address(self, upstream_ip_address: Record):
+        """
+        Clears the given IP address from the primary IP address field of the
+        device still designating it as such, if there is one.
+
+        Netbox rejects reassigning an address to an interface on another device
+        while that address is designated as the primary IP of its current
+        device, so a device replaced in NAV would otherwise keep the address
+        hostage and the reassignment would fail on every sync.
+
+        The device is tagged 'navsync' as part of this, since navsync has now
+        modified it, and it may not have been synced by navsync before.
+        """
+        field = self._primary_ip_field(upstream_ip_address)
+        if field is None:
+            return
+
+        # The primary IP fields are one-to-one, so at most one device can
+        # designate a given address as its primary IP
+        holder = self.netbox_api.dcim.devices.get(
+            **{f"{field}_id": upstream_ip_address.id}
+        )
+        if holder is None:
+            return
+
+        _logger.debug(
+            f"Clearing {field} of device {holder.name} to free up IP "
+            f"address {upstream_ip_address.address}"
+        )
+        setattr(holder, field, None)
+
+        tag_ids = self._convert_tag_names_to_ids(["navsync"], self.tags)
+        holder_tag_ids = self._get_tag_ids_from_tags(holder.tags)
+        tag_ids += [tag_id for tag_id in holder_tag_ids if tag_id not in tag_ids]
+        tag_ids.sort()
+        holder.tags = tag_ids
+
+        try:
+            holder.save()
+            # Needs to be done to reset cached values for if fields have been modified
+            holder.full_details()
+        except RequestError as e:
+            _logger.error(f"Failed to clear {field} of device {holder.name}: {str(e)}")
+
+    def _set_primary_ip_address(
+        self, upstream_device: Record, upstream_ip_address: Record
+    ):
+        """
+        Registers the given IP address as the primary IP address of the given
+        device. The IP address must already be assigned to an interface on that
+        device.
+        """
+        field = self._primary_ip_field(upstream_ip_address)
+        if field is None:
+            _logger.error(
+                f"Not setting {upstream_ip_address.address} as primary IP address "
+                f"of device {upstream_device.name}"
+            )
+            return
+        current = getattr(upstream_device, field, None)
+        if current and current.id == upstream_ip_address.id:
+            # Already registered as the device's primary IP address
+            return
+
+        setattr(upstream_device, field, upstream_ip_address.id)
+        _logger.debug(
+            f"Setting {field} of device {upstream_device.name} to "
+            f"{upstream_ip_address.address}"
+        )
+        try:
+            upstream_device.save()
+            # Needs to be done to reset cached values for if fields have been modified
+            upstream_device.full_details()
+        except RequestError as e:
+            _logger.error(
+                f"Failed to set {field} of device {upstream_device.name} to "
+                f"{upstream_ip_address.address}: {str(e)}"
+            )
 
     def _decommission_all_missing_devices(
         self, devices: dict[NameStr, Device], upstream_devices: Sequence[Record]
