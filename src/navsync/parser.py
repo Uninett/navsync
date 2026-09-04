@@ -29,6 +29,8 @@ NAV_TOKEN_ENDPOINTS = [
     "/api/1/location",
     "/api/1/room",
     "/api/1/organization",
+    "/api/1/gwportprefix",
+    "/api/1/interface",
 ]
 
 
