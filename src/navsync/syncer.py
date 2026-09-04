@@ -11,6 +11,8 @@ from navsync import netbox as netbox_helpers
 from navsync.parser import (
     Asset,
     Device,
+    Interface,
+    IpAddress,
     Location,
     NameStr,
     NavFetcher,
@@ -80,11 +82,21 @@ class Syncer:
             _logger.info("Nosync flag is set, not syncing to Netbox")
             return
 
+        interfaces = [
+            interface
+            for device in nav_data.devices.values()
+            for interface in device.interfaces
+        ]
+        ip_addresses = [
+            address for interface in interfaces for address in interface.addresses
+        ]
         self.tags = self._get_or_create_tags(
             nav_data.sites
             + nav_data.locations
             + list(nav_data.devices.values())
             + list(assets.values())
+            + interfaces
+            + ip_addresses
         )
         self.upstream_device_types_by_part_number = (
             netbox_helpers.get_device_types_by_part_number(self.netbox_api)
@@ -97,6 +109,7 @@ class Syncer:
         flat_locations = self._sync_sites_and_locations(nav_data.sites)
         self._sync_devices(nav_data.devices, flat_locations)
         self._sync_assets(assets)
+        self._sync_interfaces_and_ip_addresses(nav_data.devices)
 
         self._sync_virtual_chassis(nav_data.chassis)
 
@@ -430,6 +443,229 @@ class Syncer:
                     upstream_device_role,
                     upstream_location,
                 )
+
+    def _sync_interfaces_and_ip_addresses(self, devices: dict[NameStr, Device]):
+        """
+        Syncs every interface that NAV reports an IP address for, along with all
+        those IP addresses.
+
+        Netbox only allows an IP address to be assigned to an interface, so the
+        interfaces are created (or updated) before their addresses.
+        """
+        devices_with_interfaces = {
+            name: device for name, device in devices.items() if device.interfaces
+        }
+        if not devices_with_interfaces:
+            _logger.debug("No devices with interfaces to sync")
+            return
+
+        upstream_devices_by_name = netbox_helpers.get_devices(self.netbox_api)
+        upstream_interfaces = netbox_helpers.get_interfaces(self.netbox_api)
+        upstream_ip_addresses = netbox_helpers.get_ip_addresses(self.netbox_api)
+
+        for device_name, device in devices_with_interfaces.items():
+            upstream_device = upstream_devices_by_name.get(device_name)
+            if upstream_device is None:
+                _logger.error(
+                    f"Could not find device {device_name} when syncing its "
+                    f"interfaces. Skipping its interfaces and IP addresses."
+                )
+                continue
+
+            for interface in device.interfaces:
+                upstream_interface = self._sync_interface(
+                    interface, upstream_device, upstream_interfaces
+                )
+                if upstream_interface is None:
+                    continue
+
+                for address in interface.addresses:
+                    self._sync_ip_address(
+                        address, upstream_interface, upstream_ip_addresses
+                    )
+
+    def _sync_interface(
+        self,
+        interface: Interface,
+        upstream_device: Record,
+        upstream_interfaces: dict[int, dict[NameStr, Record]],
+    ) -> Optional[Record]:
+        """
+        Makes sure the Netbox interface with the given name exists on the given
+        device and matches the data from NAV, creating it if it does not already
+        exist and updating it if it does. Returns the interface, or None if it
+        could neither be created nor found.
+
+        Any created interface is added to 'upstream_interfaces' so that it is
+        found, rather than created again, later in the same sync.
+        """
+        upstream_interface = upstream_interfaces.get(upstream_device.id, {}).get(
+            interface.name
+        )
+        if upstream_interface:
+            self._update_interface(interface, upstream_interface)
+            return upstream_interface
+
+        tag_ids = self._convert_tag_names_to_ids(interface.tags + ["cnaas"], self.tags)
+        new_interface_dict = {
+            "device": upstream_device.id,
+            "name": interface.name,
+            "type": interface.type,
+            "enabled": interface.enabled,
+            "tags": tag_ids,
+        }
+        if interface.description:
+            new_interface_dict["description"] = interface.description
+
+        _logger.debug(
+            f"Creating new interface {interface.name} on device {upstream_device.name}"
+        )
+        try:
+            created_interface = self.netbox_api.dcim.interfaces.create(
+                **new_interface_dict
+            )
+        except RequestError as e:
+            _logger.error(
+                f"Failed to create interface {interface.name} on device "
+                f"{upstream_device.name}: {str(e)}"
+            )
+            return None
+        upstream_interfaces.setdefault(upstream_device.id, {})[interface.name] = (
+            created_interface
+        )
+        return created_interface
+
+    def _update_interface(self, interface: Interface, upstream_interface: Record):
+        """Updates an existing Netbox interface to match the data from NAV"""
+        if interface.description:
+            upstream_interface.description = interface.description
+
+        tag_ids = self._convert_tag_names_to_ids(interface.tags, self.tags)
+        upstream_interface_tag_ids = self._get_tag_ids_from_tags(
+            upstream_interface.tags
+        )
+        tag_ids += [
+            tag_id for tag_id in upstream_interface_tag_ids if tag_id not in tag_ids
+        ]
+        tag_ids.sort()
+        upstream_interface.tags = tag_ids
+
+        if upstream_interface.updates():
+            _logger.debug(
+                f"Updating interface {upstream_interface.name} on device "
+                f"{upstream_interface.device.name}: {upstream_interface.updates()}"
+            )
+            try:
+                upstream_interface.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to update interface {upstream_interface.name} on device "
+                    f"{upstream_interface.device.name}: {str(e)}"
+                )
+
+    def _sync_ip_address(
+        self,
+        address: IpAddress,
+        upstream_interface: Record,
+        upstream_ip_addresses: dict[str, Record],
+    ) -> Optional[Record]:
+        """
+        Makes sure the given IP address exists in Netbox and is assigned to the
+        given interface. Returns the IP address, or None if it could neither be
+        found nor created.
+
+        Any created IP address is added to 'upstream_ip_addresses' so that it is
+        found, rather than created again, later in the same sync.
+
+        'upstream_ip_addresses' is keyed by host address rather than by address
+        and mask, since that is what Netbox enforces uniqueness on.
+        """
+        host = netbox_helpers.host_address(address.address)
+        if host is None:
+            _logger.error(
+                f"Not syncing unparseable IP address {address.address} on "
+                f"interface {upstream_interface.name}"
+            )
+            return None
+        upstream_ip_address = upstream_ip_addresses.get(host)
+
+        if upstream_ip_address is None:
+            tag_ids = self._convert_tag_names_to_ids(
+                address.tags + ["cnaas"], self.tags
+            )
+            new_ip_address_dict = {
+                "address": address.address,
+                "status": "active",
+                "assigned_object_type": "dcim.interface",
+                "assigned_object_id": upstream_interface.id,
+                "tags": tag_ids,
+            }
+            _logger.debug(
+                f"Creating new IP address {address.address} on interface "
+                f"{upstream_interface.name}"
+            )
+            try:
+                created_ip_address = self.netbox_api.ipam.ip_addresses.create(
+                    **new_ip_address_dict
+                )
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to create IP address {address.address} on interface "
+                    f"{upstream_interface.name}: {str(e)}"
+                )
+                return None
+            upstream_ip_addresses[host] = created_ip_address
+            return created_ip_address
+
+        # Netbox treats '10.0.0.1/24' and '10.0.0.1/32' as the same address, so
+        # an address already registered with another mask is found here rather
+        # than being created again and rejected as a duplicate. Its mask is left
+        # alone: it may have been set deliberately, and navsync has no better
+        # information than whoever registered it.
+        if str(upstream_ip_address.address) != address.address:
+            _logger.debug(
+                f"IP address {upstream_ip_address.address} is already registered "
+                f"with a different mask than {address.address}. Keeping the "
+                "existing mask."
+            )
+
+        # The IP address already exists in Netbox. Make sure it is assigned to
+        # the interface NAV reports it on, since it may have moved between
+        # interfaces or devices since the last sync.
+        already_assigned = (
+            upstream_ip_address.assigned_object_type == "dcim.interface"
+            and upstream_ip_address.assigned_object_id == upstream_interface.id
+        )
+        if not already_assigned:
+            _logger.debug(
+                f"Reassigning IP address {address.address} to interface "
+                f"{upstream_interface.name} on device {upstream_interface.device.name}"
+            )
+            upstream_ip_address.assigned_object_type = "dcim.interface"
+            upstream_ip_address.assigned_object_id = upstream_interface.id
+
+        tag_ids = self._convert_tag_names_to_ids(address.tags, self.tags)
+        upstream_tag_ids = self._get_tag_ids_from_tags(upstream_ip_address.tags)
+        tag_ids += [tag_id for tag_id in upstream_tag_ids if tag_id not in tag_ids]
+        tag_ids.sort()
+        upstream_ip_address.tags = tag_ids
+
+        if upstream_ip_address.updates():
+            _logger.debug(
+                f"Updating IP address {upstream_ip_address.address}: "
+                f"{upstream_ip_address.updates()}"
+            )
+            try:
+                upstream_ip_address.save()
+                # Needs to be done to reset cached values for if fields have been modified
+                upstream_ip_address.full_details()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to update IP address {upstream_ip_address.address}: "
+                    f"{str(e)}"
+                )
+                return None
+        return upstream_ip_address
 
     def _decommission_all_missing_devices(
         self, devices: dict[NameStr, Device], upstream_devices: Sequence[Record]
@@ -830,7 +1066,18 @@ class Syncer:
         return list(tag_ids)
 
     def _get_or_create_tags(
-        self, objects: list[Union[Site, Location, Device, Asset, VirtualChassis]]
+        self,
+        objects: list[
+            Union[
+                Site,
+                Location,
+                Device,
+                Asset,
+                VirtualChassis,
+                Interface,
+                IpAddress,
+            ]
+        ],
     ) -> dict[NameStr, int]:
         """Returns dict mapping tag names to their IDs. Creates any tags that do not already exist."""
         existing_tags = {tag.name: tag.id for tag in self.netbox_api.extras.tags.all()}
