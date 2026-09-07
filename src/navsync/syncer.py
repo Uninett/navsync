@@ -1,4 +1,3 @@
-import argparse
 import logging
 from datetime import timedelta
 from typing import Optional, Sequence, Union
@@ -8,7 +7,6 @@ from dynaconf import Dynaconf
 from pynetbox.core.query import RequestError
 from pynetbox.core.response import Record
 
-from navsync import config
 from navsync import netbox as netbox_helpers
 from navsync.parser import (
     Asset,
@@ -21,86 +19,9 @@ from navsync.parser import (
     SlugStr,
     VirtualChassis,
 )
-from navsync.utils import init_logging, sanitize_slug
+from navsync.utils import sanitize_slug
 
 _logger = logging.getLogger(__name__)
-
-
-EXAMPLE_CONFIG = """\
-[netbox]
-# The 'url' option specifies the URL of the Netbox instance for which navboxes
-# from NAV should be synced to.
-url="http://127.0.0.1:8080"
-
-# The 'token' option specifies an API token with read/write access to the Netbox
-# instance's 'DCIM', 'Plugins (Inventory)', 'Virtualization' and 'Tenancy' API
-# endpoints
-token="0123456789"
-
-[nav]
-# NAV instances to sync navboxes from are found by looking through
-# - the 'Device' entries in the Netbox instance, for any device with
-#   Role='Verktøykasse' AND Status='Active'
-# - the 'VM' entries in the Netbox instance, for any VM with Role='Verktøykasse'
-#   AND Status='Active'
-
-# The 'private_key_path' option specifies a path to a PEM-encoded RSA private key
-# that will be used to sign JWTs used for authentication towards the NAV API.
-# The corresponding public key must be registered with the NAV instance(s) to be accessed.
-private_key_path="/tmp/private_key.pem"
-
-# the 'expiry_delta' option specifies how long (in seconds) a JWT
-# should be valid for.
-expiry_delta=3600
-
-# `issuer` is used to set the `iss` claim for generated tokens. This must match
-# the value configured in the NAV instances you are syncing against
-issuer="netbox-tools"\
-
-# If `https` is true, calls to the NAV APIs will use https://
-# If false, it will use http://
-https=true
-"""
-
-
-def main():
-    args = parse_args()
-    init_logging(args.loglevel)
-    settings = config.settings
-    settings.validators.validate(only=["nav"])
-    syncer = Syncer.from_settings(settings, args)
-    syncer.sync()
-
-
-def parse_args():
-    description = (
-        "Syncs navboxes (a.k.a. netboxes in NAV) from NAV to Netbox. "
-        "Configuration is needed prior to running this script. "
-        "Configuration should be placed at "
-        "'$CONFDIR/netbox-tools/netbox-tools.toml', where $CONFDIR is your "
-        "system's default configuration directory, e.g. '~/.config'.\n\n"
-        "Example minimal configuration\n"
-        "-----------------------------\n"
-        f"{EXAMPLE_CONFIG}\n"
-        "-----------------------------\n"
-    )
-    formatter = argparse.RawDescriptionHelpFormatter
-    parser = argparse.ArgumentParser(formatter_class=formatter, description=description)
-    parser.add_argument(
-        "--loglevel",
-        action="store",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="The lowest severity level a message being logged can have",
-        default="WARNING",
-    )
-    parser.add_argument(
-        "--nosync",
-        action="store_true",
-        help="Do not sync navboxes from NAV to Netbox, only get data from NAV instances. Useful "
-        "for testing connectivity and permissions towards NAV instances without making any changes in Netbox",
-    )
-    args = parser.parse_args()
-    return args
 
 
 class Syncer:
@@ -180,11 +101,13 @@ class Syncer:
         self._sync_virtual_chassis(nav_data.chassis)
 
     @classmethod
-    def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
+    def from_settings(cls, settings: Dynaconf, nosync: bool = False):
         """
         Initialize a syncer based on user-supplied settings
 
         :param settings: the netbox-tools config-file, already parsed and validated
+        :param nosync: only get data from the NAV instances, without making any
+            changes in Netbox
         """
         netbox_token = settings.netbox.token
         netbox_url = settings.netbox.url
@@ -201,7 +124,7 @@ class Syncer:
             expiry_delta=expiry_delta,
             issuer=nav_iss_claim,
             https=https,
-            nosync=args.nosync,
+            nosync=nosync,
         )
 
     def _sync_virtual_chassis(self, chassis: dict[NameStr, VirtualChassis]):
@@ -1006,7 +929,3 @@ class Syncer:
         return self.upstream_device_types_by_model.get(
             sanitize_slug(manufacturer), {}
         ).get(model)
-
-
-if __name__ == "__main__":
-    main()
