@@ -12,6 +12,7 @@ from pynetbox.core.query import RequestError
 from pynetbox.core.response import Record
 
 from navsync import config
+from navsync import netbox as netbox_helpers
 from navsync.parser import (
     Asset,
     Device,
@@ -158,7 +159,7 @@ class Syncer:
         Syncs all navboxes from all NAV server instances found on the Netbox
         server to Netbox
         """
-        self.tenants = self._get_upstream_tenants()
+        self.tenants = netbox_helpers.get_tenants(self.netbox_api)
         nav_data = self._fetch_nav_data()
         assets = {
             device.name: device.asset
@@ -177,10 +178,12 @@ class Syncer:
             + list(assets.values())
         )
         self.upstream_device_types_by_part_number = (
-            self._get_upstream_device_types_by_part_number()
+            netbox_helpers.get_device_types_by_part_number(self.netbox_api)
         )
-        self.upstream_device_types_by_model = self._get_upstream_device_types_by_model()
-        self.upstream_manufacturers = self._get_upstream_manufacturers()
+        self.upstream_device_types_by_model = netbox_helpers.get_device_types_by_model(
+            self.netbox_api
+        )
+        self.upstream_manufacturers = netbox_helpers.get_manufacturers(self.netbox_api)
 
         flat_locations = self._sync_sites_and_locations(nav_data.sites)
         self._sync_devices(nav_data.devices, flat_locations)
@@ -214,8 +217,8 @@ class Syncer:
         )
 
     def _sync_virtual_chassis(self, chassis: dict[NameStr, VirtualChassis]):
-        upstream_chassis = self._get_upstream_chassis()
-        upstream_devices = self._get_upstream_devices()
+        upstream_chassis = netbox_helpers.get_virtual_chassis(self.netbox_api)
+        upstream_devices = netbox_helpers.get_devices(self.netbox_api)
 
         self._delete_all_missing_virtual_chassis(
             chassis, upstream_chassis, upstream_devices.values()
@@ -335,8 +338,8 @@ class Syncer:
                 )
 
     def _sync_assets(self, assets: dict[NameStr, Asset]):
-        upstream_devices_by_name = self._get_upstream_devices()
-        upstream_assets = self._get_upstream_assets()
+        upstream_devices_by_name = netbox_helpers.get_devices(self.netbox_api)
+        upstream_assets = netbox_helpers.get_assets(self.netbox_api)
         upstream_asset_list = [
             asset
             for device_assets in upstream_assets.values()
@@ -357,8 +360,8 @@ class Syncer:
                 upstream_device.device_type.id, {}
             ).get(asset.serial)
 
-            prior_asset = self._get_upstream_asset_for_device(
-                upstream_device.id, upstream_asset_list
+            prior_asset = netbox_helpers.find_asset_for_device(
+                upstream_asset_list, upstream_device.id
             )
             if prior_asset and prior_asset.serial != asset.serial:
                 _logger.debug(
@@ -470,29 +473,14 @@ class Syncer:
         except RequestError as e:
             _logger.error(f"Failed to shelve asset {upstream_asset.serial}: {str(e)}")
 
-    def _get_upstream_asset_for_device(
-        self, device_id: int, upstream_assets: Sequence[Record]
-    ) -> Optional[Record]:
-        for asset in upstream_assets:
-            # Can either be None, an int int or a Record object
-            if asset.device is None:
-                continue
-            elif isinstance(asset.device, int):
-                asset_device_id = asset.device
-            else:
-                asset_device_id = asset.device.id
-            if asset_device_id == device_id:
-                return asset
-        return None
-
     def _sync_devices(
         self,
         devices: dict[NameStr, Device],
         flat_locations: dict[str, dict[NameStr, Record]],
     ):
-        upstream_devices_by_name = self._get_upstream_devices()
-        upstream_sites = self._get_upstream_sites()
-        upstream_device_roles_by_name = self._get_upstream_device_roles()
+        upstream_devices_by_name = netbox_helpers.get_devices(self.netbox_api)
+        upstream_sites = netbox_helpers.get_sites(self.netbox_api)
+        upstream_device_roles_by_name = netbox_helpers.get_device_roles(self.netbox_api)
 
         self._decommission_all_missing_devices(
             devices, upstream_devices_by_name.values()
@@ -500,8 +488,10 @@ class Syncer:
 
         for device in devices.values():
             upstream_device = upstream_devices_by_name.get(device.name)
-            upstream_site = self._get_upstream_site(
-                upstream_sites, device.location.site
+            upstream_site = netbox_helpers.find_site(
+                upstream_sites,
+                name=device.location.site.name,
+                slug=device.location.site.slug,
             )
             if not upstream_site:
                 raise ValueError(
@@ -644,11 +634,6 @@ class Syncer:
             except RequestError as e:
                 _logger.error(f"Failed to update device {device.name}: {str(e)}")
 
-    def _get_upstream_manufacturers(self) -> dict[SlugStr, Record]:
-        """Maps slug to manufacturer Record"""
-        upstream_manufacturers = self.netbox_api.dcim.manufacturers.all()
-        return {m.slug: m for m in upstream_manufacturers}
-
     def get_or_create_device_type(self, manufacturer: str, model: str) -> Record:
         upstream_device_type = self._get_device_type(manufacturer, model)
         if not upstream_device_type:
@@ -697,14 +682,16 @@ class Syncer:
     ) -> dict[str, dict[NameStr, Record]]:
         """Syncs sites and their nested location hierarchies to Netbox.
         Returns a map of nav_server -> location_name -> upstream Record for use by device syncing."""
-        upstream_sites = self._get_upstream_sites()
+        upstream_sites = netbox_helpers.get_sites(self.netbox_api)
         upstream_locations_by_slug, upstream_locations_by_name = (
-            self._get_upstream_locations()
+            netbox_helpers.get_locations(self.netbox_api)
         )
         flat_locations: dict[str, dict[NameStr, Record]] = {}
 
         for site in sites:
-            upstream_site = self._get_upstream_site(upstream_sites, site)
+            upstream_site = netbox_helpers.find_site(
+                upstream_sites, name=site.name, slug=site.slug
+            )
             if upstream_site:
                 self._update_site(site, upstream_site)
             else:
@@ -945,94 +932,6 @@ class Syncer:
                     existing_tags[created_tag.name] = created_tag.id
         return existing_tags
 
-    def _get_upstream_chassis(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to virtual chassis"""
-        return {
-            chassis.name: chassis
-            for chassis in self.netbox_api.dcim.virtual_chassis.all()
-        }
-
-    def _get_upstream_assets(self) -> dict[int, dict[SerialStr, Record]]:
-        """Returns dict mapping device type IDs and serial numbers to assets. The first dict maps device type id to a dict of serial numbers, and the second dict maps serial numbers to asset Records"""
-        assets = {}
-        for asset in self.netbox_api.plugins.inventory.assets.all():
-            if not asset.device_type or not asset.serial:
-                continue
-            if asset.device_type.id not in assets:
-                assets[asset.device_type.id] = {}
-            assets[asset.device_type.id][asset.serial] = asset
-        return assets
-
-    def _get_upstream_tenants(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to tenant"""
-        return {tenant.name: tenant for tenant in self.netbox_api.tenancy.tenants.all()}
-
-    def _get_upstream_device_types_by_part_number(
-        self,
-    ) -> dict[SlugStr, dict[str, Record]]:
-        """Returns dict mapping manufacturer slug to part numbers and device types"""
-        device_types = {}
-        for device_type in self.netbox_api.dcim.device_types.all():
-            if device_type.manufacturer.slug not in device_types:
-                device_types[device_type.manufacturer.slug] = {}
-            device_types[device_type.manufacturer.slug][device_type.part_number] = (
-                device_type
-            )
-        return device_types
-
-    def _get_upstream_device_types_by_model(self) -> dict[SlugStr, dict[str, Record]]:
-        """Returns dict mapping manufacturer slug to models and device types"""
-        device_types = {}
-        for device_type in self.netbox_api.dcim.device_types.all():
-            if device_type.manufacturer.slug not in device_types:
-                device_types[device_type.manufacturer.slug] = {}
-            device_types[device_type.manufacturer.slug][device_type.model] = device_type
-        return device_types
-
-    def _get_upstream_device_roles(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to device role"""
-        return {
-            device_role.name: device_role
-            for device_role in self.netbox_api.dcim.device_roles.all()
-        }
-
-    def _get_upstream_locations(
-        self,
-    ) -> tuple[
-        dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]],
-        dict[SlugStr, dict[NameStr, dict[Optional[int], Record]]],
-    ]:
-        """Returns (by_slug, by_name): site slug -> location slug/name -> parent id -> Record."""
-        by_slug: dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]] = {}
-        by_name: dict[SlugStr, dict[NameStr, dict[Optional[int], Record]]] = {}
-        for location in self.netbox_api.dcim.locations.all():
-            parent_id = location.parent.id if location.parent else None
-            by_slug.setdefault(location.site.slug, {}).setdefault(location.slug, {})[
-                parent_id
-            ] = location
-            by_name.setdefault(location.site.slug, {}).setdefault(location.name, {})[
-                parent_id
-            ] = location
-        return by_slug, by_name
-
-    def _get_upstream_devices(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to device"""
-        return {device.name: device for device in self.netbox_api.dcim.devices.all()}
-
-    def _get_upstream_sites(self) -> list[Record]:
-        return list(self.netbox_api.dcim.sites.all())
-
-    def _get_upstream_site(
-        self, upstream_sites: Sequence[Record], site: Site
-    ) -> Optional[Record]:
-        """Looks through sequence of upstream sites to find matching site.
-        Returns upstream site of type `Record` if there is a match.
-        Returns None if there is no match
-        """
-        for upstream_site in upstream_sites:
-            if upstream_site.slug == site.slug or upstream_site.name == site.name:
-                return upstream_site
-
     def _register_devices_as_members_of_vc(
         self,
         devices: Sequence[Device],
@@ -1054,9 +953,9 @@ class Syncer:
                     # Device is already registered in correct position
                     continue
 
-                prior_stack_member = self._get_device_for_pos_in_vc(
+                prior_stack_member = netbox_helpers.find_device_in_vc_position(
+                    upstream_devices.values(),
                     virtual_chassis.id,
-                    upstream_devices,
                     device.vc_position,
                 )
 
@@ -1088,30 +987,6 @@ class Syncer:
                     _logger.error(
                         f"Could not register device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}: {str(e)}"
                     )
-
-    def _get_device_for_pos_in_vc(
-        self,
-        virtual_chassis_id: int,
-        upstream_devices: dict[NameStr, Record],
-        position: int,
-    ) -> Optional[Record]:
-        """Returns the device in the given position in the given virtual chassis.
-        If no such device exists, returns None.
-        """
-        for device in upstream_devices.values():
-            if device.virtual_chassis:
-                # it will be a Record straight from Netbox, but will be int if its been modified locally
-                if isinstance(device.virtual_chassis, int):
-                    upstream_virtual_chassis_id = device.virtual_chassis
-                else:
-                    upstream_virtual_chassis_id = device.virtual_chassis.id
-
-                if (
-                    upstream_virtual_chassis_id == virtual_chassis_id
-                    and device.vc_position == position
-                ):
-                    return device
-        return None
 
     def _fetch_nav_data(self) -> NavData:
         """Fetches all data from all NAV servers in a single pass."""
