@@ -1,9 +1,12 @@
 import logging
-from dataclasses import dataclass
+import time
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 from enum import IntEnum
-from typing import Callable, Literal, NewType, Optional, Self, Sequence
+from typing import Callable, Iterable, Literal, NewType, Optional, Self, Sequence
 from urllib.parse import urljoin
 
+import jwt
 from requests.exceptions import RequestException
 
 from navsync.geocoder import geocode_address
@@ -18,6 +21,15 @@ ModelStr = LowerStr
 SlugStr = str
 SerialStr = str
 NameStr = str
+
+# The NAV API endpoints navsync's token is allowed to read
+NAV_TOKEN_ENDPOINTS = [
+    "/api/1/netbox",
+    "/api/1/netboxentity",
+    "/api/1/location",
+    "/api/1/room",
+    "/api/1/organization",
+]
 
 
 @dataclass
@@ -118,6 +130,14 @@ class VirtualChassis:
     devices: list[Device]
     nav_server: str
     navbox: NavBox | None = None
+
+
+@dataclass
+class NavData:
+    sites: list[Site] = field(default_factory=list)
+    locations: list[Location] = field(default_factory=list)
+    chassis: dict[NameStr, VirtualChassis] = field(default_factory=dict)
+    devices: dict[NameStr, Device] = field(default_factory=dict)
 
 
 class IANAPhysicalClass(IntEnum):
@@ -685,6 +705,189 @@ class LocationHierarchyParser:
         )
         self._sites[name] = site
         return site
+
+
+class NavFetcher:
+    """
+    Fetches sites, locations, devices and virtual chassis from NAV instances.
+
+    Use :meth fetch: to get everything from a set of instances in a single pass.
+    """
+
+    def __init__(
+        self,
+        private_key: str,
+        expiry_delta: timedelta,
+        issuer: str,
+        netbox_tenants: dict[NameStr, int],
+    ):
+        """
+        :param private_key: PEM-encoded RSA key used to sign tokens for the NAV
+            API. The corresponding public key must be registered with the NAV
+            instances to be accessed.
+        :param expiry_delta: how long a signed token stays valid
+        :param issuer: the 'iss' claim to set on signed tokens, which must match
+            what the NAV instances are configured with
+        :param netbox_tenants: maps Netbox tenant name to id, used to resolve
+            which tenant a navbox's organization belongs to
+        """
+        self.private_key = private_key
+        self.expiry_delta = expiry_delta
+        self.issuer = issuer
+        self.netbox_tenants = netbox_tenants
+
+    def fetch(self, nav_servers: Iterable[NavServerInfo]) -> NavData:
+        """
+        Fetches all data from the given NAV servers in a single pass.
+
+        :param nav_servers: the NAV instances to fetch from
+        """
+        result = NavData()
+        sites: dict[str, Site] = {}  # keyed by name for duplicate detection
+        all_entities: list[VirtualChassis | Device] = []
+
+        for nav_server in nav_servers:
+            token = self.generate_nav_token(aud=nav_server.url)
+            # Sleep to avoid issues with the `nbf` claim.
+            time.sleep(1)
+            server_sites, server_locations = LocationHierarchyParser(
+                nav_server, token
+            ).get_sites_and_locations()
+
+            for site in server_sites.values():
+                if site.name in sites:
+                    raise ValueError(
+                        f"Duplicate site name {site.name} found across NAV servers. Site names must be unique across all NAV servers."
+                    )
+                sites[site.name] = site
+            result.locations.extend(server_locations.values())
+
+            # Sleep to avoid issues with the `nbf` claim.
+            time.sleep(1)
+            all_entities.extend(
+                EntityParser(
+                    nav_server,
+                    token,
+                    locations=server_locations,
+                    netbox_tenants=self.netbox_tenants,
+                ).parse()
+            )
+
+        result.chassis, result.devices = self._get_virtual_chassis_and_devices(
+            all_entities
+        )
+        result.sites = list(sites.values())
+        result.devices = self._handle_duplicate_serials(result.devices)
+        return result
+
+    def _get_virtual_chassis_and_devices(
+        self,
+        entities: list[VirtualChassis | Device],
+    ) -> tuple[dict[NameStr, VirtualChassis], dict[NameStr, Device]]:
+        virtual_chassises: dict[NameStr, VirtualChassis] = {}
+        devices: dict[NameStr, Device] = {}
+        for entity in entities:
+            match entity:
+                case VirtualChassis():
+                    if entity.name in virtual_chassises:
+                        _logger.error(
+                            f"Duplicate virtual chassis name {entity.name}. Dropping duplicate."
+                        )
+                        continue
+                    virtual_chassises[entity.name] = entity
+                    for device in entity.devices:
+                        if device.name in devices:
+                            _logger.error(
+                                f"Duplicate device name {device.name}. Dropping duplicate."
+                            )
+                            continue
+                        devices[device.name] = device
+                case Device():
+                    if entity.name in devices:
+                        _logger.error(
+                            f"Duplicate physical chassis name {entity.name}. Dropping duplicate."
+                        )
+                        continue
+                    devices[entity.name] = entity
+                case _:
+                    raise TypeError(f"Unexpected entity type {type(entity)}")
+        return virtual_chassises, devices
+
+    def _handle_duplicate_serials(self, devices: dict[NameStr, Device]):
+        devices_copy = devices.copy()
+        serials = self._group_devices_by_type_and_serial(devices.values())
+        for manufacturer, serials_by_manufacturer in serials.items():
+            for model, serials_by_model in serials_by_manufacturer.items():
+                for serial, devices_with_serial in serials_by_model.items():
+                    if len(devices_with_serial) > 1:
+                        _logger.warning(
+                            f"Duplicate asset {serial} found for manufacturer {manufacturer} and model {model} in devices {[device.name for device in devices_with_serial]}"
+                        )
+                    else:
+                        continue
+                    up_devices = [
+                        device
+                        for device in devices_with_serial
+                        if not device.status == "offline"
+                    ]
+                    if len(up_devices) == 1:
+                        device_to_keep = up_devices[0]
+                        _logger.debug(
+                            f"Device {device_to_keep.name} is up while the other device(s) with the same serial are down. Removing asset from the downed devices."
+                        )
+                        for device in devices_with_serial:
+                            if device.status == "offline":
+                                devices_copy[device.name].asset = None
+                    elif len(up_devices) > 1:
+                        _logger.error(
+                            f"Multiple devices with asset {serial} are marked as up. Syncing devices without assets."
+                        )
+                        for device in devices_with_serial:
+                            devices_copy[device.name].asset = None
+                    else:
+                        _logger.error(
+                            f"All devices with asset {serial} are marked as down. Syncing devices without assets."
+                        )
+                        for device in devices_with_serial:
+                            devices_copy[device.name].asset = None
+
+        return devices_copy
+
+    def _group_devices_by_type_and_serial(
+        self,
+        devices: Sequence[Device],
+    ) -> dict[ManufacturerStr, dict[ModelStr, dict[SerialStr, list[Device]]]]:
+        """Groups devices by manufacturer, model and serial number"""
+        grouped_dict = {}
+        for device in devices:
+            if not device.asset:
+                continue
+            manufacturer = device.asset.manufacturer
+            model = device.asset.model
+            serial = device.asset.serial
+            if manufacturer not in grouped_dict:
+                grouped_dict[manufacturer] = {}
+            if model not in grouped_dict[manufacturer]:
+                grouped_dict[manufacturer][model] = {}
+            if serial not in grouped_dict[manufacturer][model]:
+                grouped_dict[manufacturer][model][serial] = []
+            grouped_dict[manufacturer][model][serial].append(device)
+        return grouped_dict
+
+    def generate_nav_token(self, aud: str) -> str:
+        """Returns a JWT granting read access to the NAV API at 'aud'"""
+        now = datetime.now(timezone.utc)
+        jwt_claims = {
+            "exp": (now + self.expiry_delta).timestamp(),
+            "nbf": now.timestamp(),
+            "iat": now.timestamp(),
+            "aud": aud,
+            "iss": self.issuer,
+            "token_type": "access",
+            "endpoints": NAV_TOKEN_ENDPOINTS,
+            "write": False,
+        }
+        return jwt.encode(jwt_claims, self.private_key, algorithm="RS256")
 
 
 class NextAttempt(Exception):

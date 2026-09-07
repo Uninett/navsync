@@ -1,125 +1,27 @@
-import argparse
 import logging
-import time
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Iterable, Optional, Sequence, Union
+from datetime import timedelta
+from typing import Optional, Sequence, Union
 
-import jwt
 import pynetbox.core.api as netbox
 from dynaconf import Dynaconf
 from pynetbox.core.query import RequestError
 from pynetbox.core.response import Record
 
-from navsync import config
+from navsync import netbox as netbox_helpers
 from navsync.parser import (
     Asset,
     Device,
-    EntityParser,
     Location,
-    LocationHierarchyParser,
-    ManufacturerStr,
-    ModelStr,
     NameStr,
+    NavFetcher,
     SerialStr,
     Site,
     SlugStr,
     VirtualChassis,
 )
-from navsync.utils import (
-    NavServerInfo,
-    init_logging,
-    sanitize_slug,
-    url_with_http,
-    url_with_https,
-)
+from navsync.utils import sanitize_slug
 
 _logger = logging.getLogger(__name__)
-
-
-@dataclass
-class NavData:
-    sites: list[Site] = field(default_factory=list)
-    locations: list[Location] = field(default_factory=list)
-    chassis: dict[NameStr, VirtualChassis] = field(default_factory=dict)
-    devices: dict[NameStr, Device] = field(default_factory=dict)
-
-
-EXAMPLE_CONFIG = """\
-[netbox]
-# The 'url' option specifies the URL of the Netbox instance for which navboxes
-# from NAV should be synced to.
-url="http://127.0.0.1:8080"
-
-# The 'token' option specifies an API token with read/write access to the Netbox
-# instance's 'DCIM', 'Plugins (Inventory)', 'Virtualization' and 'Tenancy' API
-# endpoints
-token="0123456789"
-
-[nav]
-# NAV instances to sync navboxes from are found by looking through
-# - the 'Device' entries in the Netbox instance, for any device with
-#   Role='Verktøykasse' AND Status='Active'
-# - the 'VM' entries in the Netbox instance, for any VM with Role='Verktøykasse'
-#   AND Status='Active'
-
-# The 'private_key_path' option specifies a path to a PEM-encoded RSA private key
-# that will be used to sign JWTs used for authentication towards the NAV API.
-# The corresponding public key must be registered with the NAV instance(s) to be accessed.
-private_key_path="/tmp/private_key.pem"
-
-# the 'expiry_delta' option specifies how long (in seconds) a JWT
-# should be valid for.
-expiry_delta=3600
-
-# `issuer` is used to set the `iss` claim for generated tokens. This must match
-# the value configured in the NAV instances you are syncing against
-issuer="netbox-tools"\
-
-# If `https` is true, calls to the NAV APIs will use https://
-# If false, it will use http://
-https=true
-"""
-
-
-def main():
-    args = parse_args()
-    init_logging(args.loglevel)
-    settings = config.settings
-    settings.validators.validate(only=["nav"])
-    syncer = Syncer.from_settings(settings, args)
-    syncer.sync()
-
-
-def parse_args():
-    description = (
-        "Syncs navboxes (a.k.a. netboxes in NAV) from NAV to Netbox. "
-        "Configuration is needed prior to running this script. "
-        "Configuration should be placed at "
-        "'$CONFDIR/netbox-tools/netbox-tools.toml', where $CONFDIR is your "
-        "system's default configuration directory, e.g. '~/.config'.\n\n"
-        "Example minimal configuration\n"
-        "-----------------------------\n"
-        f"{EXAMPLE_CONFIG}\n"
-        "-----------------------------\n"
-    )
-    formatter = argparse.RawDescriptionHelpFormatter
-    parser = argparse.ArgumentParser(formatter_class=formatter, description=description)
-    parser.add_argument(
-        "--loglevel",
-        action="store",
-        choices=["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"],
-        help="The lowest severity level a message being logged can have",
-        default="WARNING",
-    )
-    parser.add_argument(
-        "--nosync",
-        action="store_true",
-        help="Do not sync navboxes from NAV to Netbox, only get data from NAV instances. Useful "
-        "for testing connectivity and permissions towards NAV instances without making any changes in Netbox",
-    )
-    args = parser.parse_args()
-    return args
 
 
 class Syncer:
@@ -130,10 +32,10 @@ class Syncer:
     Use :meth sync: to sync
     """
 
+    netbox_api: netbox.Api
     private_key: str
     expiry_delta: timedelta
     issuer: str
-    netbox_api: netbox.Api
     https: bool
     nosync: bool
 
@@ -158,8 +60,16 @@ class Syncer:
         Syncs all navboxes from all NAV server instances found on the Netbox
         server to Netbox
         """
-        self.tenants = self._get_upstream_tenants()
-        nav_data = self._fetch_nav_data()
+        self.tenants = netbox_helpers.get_tenants(self.netbox_api)
+        nav_fetcher = NavFetcher(
+            private_key=self.private_key,
+            expiry_delta=self.expiry_delta,
+            issuer=self.issuer,
+            netbox_tenants={name: t.id for name, t in self.tenants.items()},
+        )
+        nav_data = nav_fetcher.fetch(
+            nav_servers=netbox_helpers.get_nav_servers(self.netbox_api, self.https)
+        )
         assets = {
             device.name: device.asset
             for device in nav_data.devices.values()
@@ -177,10 +87,12 @@ class Syncer:
             + list(assets.values())
         )
         self.upstream_device_types_by_part_number = (
-            self._get_upstream_device_types_by_part_number()
+            netbox_helpers.get_device_types_by_part_number(self.netbox_api)
         )
-        self.upstream_device_types_by_model = self._get_upstream_device_types_by_model()
-        self.upstream_manufacturers = self._get_upstream_manufacturers()
+        self.upstream_device_types_by_model = netbox_helpers.get_device_types_by_model(
+            self.netbox_api
+        )
+        self.upstream_manufacturers = netbox_helpers.get_manufacturers(self.netbox_api)
 
         flat_locations = self._sync_sites_and_locations(nav_data.sites)
         self._sync_devices(nav_data.devices, flat_locations)
@@ -189,11 +101,13 @@ class Syncer:
         self._sync_virtual_chassis(nav_data.chassis)
 
     @classmethod
-    def from_settings(cls, settings: Dynaconf, args: argparse.Namespace):
+    def from_settings(cls, settings: Dynaconf, nosync: bool = False):
         """
         Initialize a syncer based on user-supplied settings
 
         :param settings: the netbox-tools config-file, already parsed and validated
+        :param nosync: only get data from the NAV instances, without making any
+            changes in Netbox
         """
         netbox_token = settings.netbox.token
         netbox_url = settings.netbox.url
@@ -210,12 +124,12 @@ class Syncer:
             expiry_delta=expiry_delta,
             issuer=nav_iss_claim,
             https=https,
-            nosync=args.nosync,
+            nosync=nosync,
         )
 
     def _sync_virtual_chassis(self, chassis: dict[NameStr, VirtualChassis]):
-        upstream_chassis = self._get_upstream_chassis()
-        upstream_devices = self._get_upstream_devices()
+        upstream_chassis = netbox_helpers.get_virtual_chassis(self.netbox_api)
+        upstream_devices = netbox_helpers.get_devices(self.netbox_api)
 
         self._delete_all_missing_virtual_chassis(
             chassis, upstream_chassis, upstream_devices.values()
@@ -335,8 +249,8 @@ class Syncer:
                 )
 
     def _sync_assets(self, assets: dict[NameStr, Asset]):
-        upstream_devices_by_name = self._get_upstream_devices()
-        upstream_assets = self._get_upstream_assets()
+        upstream_devices_by_name = netbox_helpers.get_devices(self.netbox_api)
+        upstream_assets = netbox_helpers.get_assets(self.netbox_api)
         upstream_asset_list = [
             asset
             for device_assets in upstream_assets.values()
@@ -357,8 +271,8 @@ class Syncer:
                 upstream_device.device_type.id, {}
             ).get(asset.serial)
 
-            prior_asset = self._get_upstream_asset_for_device(
-                upstream_device.id, upstream_asset_list
+            prior_asset = netbox_helpers.find_asset_for_device(
+                upstream_asset_list, upstream_device.id
             )
             if prior_asset and prior_asset.serial != asset.serial:
                 _logger.debug(
@@ -470,29 +384,14 @@ class Syncer:
         except RequestError as e:
             _logger.error(f"Failed to shelve asset {upstream_asset.serial}: {str(e)}")
 
-    def _get_upstream_asset_for_device(
-        self, device_id: int, upstream_assets: Sequence[Record]
-    ) -> Optional[Record]:
-        for asset in upstream_assets:
-            # Can either be None, an int int or a Record object
-            if asset.device is None:
-                continue
-            elif isinstance(asset.device, int):
-                asset_device_id = asset.device
-            else:
-                asset_device_id = asset.device.id
-            if asset_device_id == device_id:
-                return asset
-        return None
-
     def _sync_devices(
         self,
         devices: dict[NameStr, Device],
         flat_locations: dict[str, dict[NameStr, Record]],
     ):
-        upstream_devices_by_name = self._get_upstream_devices()
-        upstream_sites = self._get_upstream_sites()
-        upstream_device_roles_by_name = self._get_upstream_device_roles()
+        upstream_devices_by_name = netbox_helpers.get_devices(self.netbox_api)
+        upstream_sites = netbox_helpers.get_sites(self.netbox_api)
+        upstream_device_roles_by_name = netbox_helpers.get_device_roles(self.netbox_api)
 
         self._decommission_all_missing_devices(
             devices, upstream_devices_by_name.values()
@@ -500,8 +399,10 @@ class Syncer:
 
         for device in devices.values():
             upstream_device = upstream_devices_by_name.get(device.name)
-            upstream_site = self._get_upstream_site(
-                upstream_sites, device.location.site
+            upstream_site = netbox_helpers.find_site(
+                upstream_sites,
+                name=device.location.site.name,
+                slug=device.location.site.slug,
             )
             if not upstream_site:
                 raise ValueError(
@@ -644,11 +545,6 @@ class Syncer:
             except RequestError as e:
                 _logger.error(f"Failed to update device {device.name}: {str(e)}")
 
-    def _get_upstream_manufacturers(self) -> dict[SlugStr, Record]:
-        """Maps slug to manufacturer Record"""
-        upstream_manufacturers = self.netbox_api.dcim.manufacturers.all()
-        return {m.slug: m for m in upstream_manufacturers}
-
     def get_or_create_device_type(self, manufacturer: str, model: str) -> Record:
         upstream_device_type = self._get_device_type(manufacturer, model)
         if not upstream_device_type:
@@ -697,14 +593,16 @@ class Syncer:
     ) -> dict[str, dict[NameStr, Record]]:
         """Syncs sites and their nested location hierarchies to Netbox.
         Returns a map of nav_server -> location_name -> upstream Record for use by device syncing."""
-        upstream_sites = self._get_upstream_sites()
+        upstream_sites = netbox_helpers.get_sites(self.netbox_api)
         upstream_locations_by_slug, upstream_locations_by_name = (
-            self._get_upstream_locations()
+            netbox_helpers.get_locations(self.netbox_api)
         )
         flat_locations: dict[str, dict[NameStr, Record]] = {}
 
         for site in sites:
-            upstream_site = self._get_upstream_site(upstream_sites, site)
+            upstream_site = netbox_helpers.find_site(
+                upstream_sites, name=site.name, slug=site.slug
+            )
             if upstream_site:
                 self._update_site(site, upstream_site)
             else:
@@ -945,94 +843,6 @@ class Syncer:
                     existing_tags[created_tag.name] = created_tag.id
         return existing_tags
 
-    def _get_upstream_chassis(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to virtual chassis"""
-        return {
-            chassis.name: chassis
-            for chassis in self.netbox_api.dcim.virtual_chassis.all()
-        }
-
-    def _get_upstream_assets(self) -> dict[int, dict[SerialStr, Record]]:
-        """Returns dict mapping device type IDs and serial numbers to assets. The first dict maps device type id to a dict of serial numbers, and the second dict maps serial numbers to asset Records"""
-        assets = {}
-        for asset in self.netbox_api.plugins.inventory.assets.all():
-            if not asset.device_type or not asset.serial:
-                continue
-            if asset.device_type.id not in assets:
-                assets[asset.device_type.id] = {}
-            assets[asset.device_type.id][asset.serial] = asset
-        return assets
-
-    def _get_upstream_tenants(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to tenant"""
-        return {tenant.name: tenant for tenant in self.netbox_api.tenancy.tenants.all()}
-
-    def _get_upstream_device_types_by_part_number(
-        self,
-    ) -> dict[SlugStr, dict[str, Record]]:
-        """Returns dict mapping manufacturer slug to part numbers and device types"""
-        device_types = {}
-        for device_type in self.netbox_api.dcim.device_types.all():
-            if device_type.manufacturer.slug not in device_types:
-                device_types[device_type.manufacturer.slug] = {}
-            device_types[device_type.manufacturer.slug][device_type.part_number] = (
-                device_type
-            )
-        return device_types
-
-    def _get_upstream_device_types_by_model(self) -> dict[SlugStr, dict[str, Record]]:
-        """Returns dict mapping manufacturer slug to models and device types"""
-        device_types = {}
-        for device_type in self.netbox_api.dcim.device_types.all():
-            if device_type.manufacturer.slug not in device_types:
-                device_types[device_type.manufacturer.slug] = {}
-            device_types[device_type.manufacturer.slug][device_type.model] = device_type
-        return device_types
-
-    def _get_upstream_device_roles(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to device role"""
-        return {
-            device_role.name: device_role
-            for device_role in self.netbox_api.dcim.device_roles.all()
-        }
-
-    def _get_upstream_locations(
-        self,
-    ) -> tuple[
-        dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]],
-        dict[SlugStr, dict[NameStr, dict[Optional[int], Record]]],
-    ]:
-        """Returns (by_slug, by_name): site slug -> location slug/name -> parent id -> Record."""
-        by_slug: dict[SlugStr, dict[SlugStr, dict[Optional[int], Record]]] = {}
-        by_name: dict[SlugStr, dict[NameStr, dict[Optional[int], Record]]] = {}
-        for location in self.netbox_api.dcim.locations.all():
-            parent_id = location.parent.id if location.parent else None
-            by_slug.setdefault(location.site.slug, {}).setdefault(location.slug, {})[
-                parent_id
-            ] = location
-            by_name.setdefault(location.site.slug, {}).setdefault(location.name, {})[
-                parent_id
-            ] = location
-        return by_slug, by_name
-
-    def _get_upstream_devices(self) -> dict[NameStr, Record]:
-        """Returns dict mapping name to device"""
-        return {device.name: device for device in self.netbox_api.dcim.devices.all()}
-
-    def _get_upstream_sites(self) -> list[Record]:
-        return list(self.netbox_api.dcim.sites.all())
-
-    def _get_upstream_site(
-        self, upstream_sites: Sequence[Record], site: Site
-    ) -> Optional[Record]:
-        """Looks through sequence of upstream sites to find matching site.
-        Returns upstream site of type `Record` if there is a match.
-        Returns None if there is no match
-        """
-        for upstream_site in upstream_sites:
-            if upstream_site.slug == site.slug or upstream_site.name == site.name:
-                return upstream_site
-
     def _register_devices_as_members_of_vc(
         self,
         devices: Sequence[Device],
@@ -1054,9 +864,9 @@ class Syncer:
                     # Device is already registered in correct position
                     continue
 
-                prior_stack_member = self._get_device_for_pos_in_vc(
+                prior_stack_member = netbox_helpers.find_device_in_vc_position(
+                    upstream_devices.values(),
                     virtual_chassis.id,
-                    upstream_devices,
                     device.vc_position,
                 )
 
@@ -1089,253 +899,6 @@ class Syncer:
                         f"Could not register device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}: {str(e)}"
                     )
 
-    def _get_device_for_pos_in_vc(
-        self,
-        virtual_chassis_id: int,
-        upstream_devices: dict[NameStr, Record],
-        position: int,
-    ) -> Optional[Record]:
-        """Returns the device in the given position in the given virtual chassis.
-        If no such device exists, returns None.
-        """
-        for device in upstream_devices.values():
-            if device.virtual_chassis:
-                # it will be a Record straight from Netbox, but will be int if its been modified locally
-                if isinstance(device.virtual_chassis, int):
-                    upstream_virtual_chassis_id = device.virtual_chassis
-                else:
-                    upstream_virtual_chassis_id = device.virtual_chassis.id
-
-                if (
-                    upstream_virtual_chassis_id == virtual_chassis_id
-                    and device.vc_position == position
-                ):
-                    return device
-        return None
-
-    def _fetch_nav_data(self) -> NavData:
-        """Fetches all data from all NAV servers in a single pass."""
-        result = NavData()
-        sites: dict[str, Site] = {}  # keyed by name for duplicate detection
-        all_entities: list[VirtualChassis | Device] = []
-
-        for nav_server in self._get_nav_servers():
-            token = self._generate_nav_token(aud=nav_server.url)
-            # Sleep to avoid issues with the `nbf` claim.
-            time.sleep(1)
-            server_sites, server_locations = LocationHierarchyParser(
-                nav_server, token
-            ).get_sites_and_locations()
-
-            for site in server_sites.values():
-                if site.name in sites:
-                    raise ValueError(
-                        f"Duplicate site name {site.name} found across NAV servers. Site names must be unique across all NAV servers."
-                    )
-                sites[site.name] = site
-            result.locations.extend(server_locations.values())
-
-            # Sleep to avoid issues with the `nbf` claim.
-            time.sleep(1)
-            all_entities.extend(
-                EntityParser(
-                    nav_server,
-                    token,
-                    locations=server_locations,
-                    netbox_tenants={name: t.id for name, t in self.tenants.items()},
-                ).parse()
-            )
-
-        result.chassis, result.devices = self._get_virtual_chassis_and_devices(
-            all_entities
-        )
-        result.sites = list(sites.values())
-        result.devices = self._handle_duplicate_serials(result.devices)
-        return result
-
-    def _get_virtual_chassis_and_devices(
-        self,
-        entities: list[VirtualChassis | Device],
-    ) -> tuple[dict[NameStr, VirtualChassis], dict[NameStr, Device]]:
-        virtual_chassises: dict[NameStr, VirtualChassis] = {}
-        devices: dict[NameStr, Device] = {}
-        for entity in entities:
-            match entity:
-                case VirtualChassis():
-                    if entity.name in virtual_chassises:
-                        _logger.error(
-                            f"Duplicate virtual chassis name {entity.name}. Dropping duplicate."
-                        )
-                        continue
-                    virtual_chassises[entity.name] = entity
-                    for device in entity.devices:
-                        if device.name in devices:
-                            _logger.error(
-                                f"Duplicate device name {device.name}. Dropping duplicate."
-                            )
-                            continue
-                        devices[device.name] = device
-                case Device():
-                    if entity.name in devices:
-                        _logger.error(
-                            f"Duplicate physical chassis name {entity.name}. Dropping duplicate."
-                        )
-                        continue
-                    devices[entity.name] = entity
-                case _:
-                    raise TypeError(f"Unexpected entity type {type(entity)}")
-        return virtual_chassises, devices
-
-    def _handle_duplicate_serials(self, devices: dict[NameStr, Device]):
-        devices_copy = devices.copy()
-        serials = self._group_devices_by_type_and_serial(devices.values())
-        for manufacturer, serials_by_manufacturer in serials.items():
-            for model, serials_by_model in serials_by_manufacturer.items():
-                for serial, devices_with_serial in serials_by_model.items():
-                    if len(devices_with_serial) > 1:
-                        _logger.warning(
-                            f"Duplicate asset {serial} found for manufacturer {manufacturer} and model {model} in devices {[device.name for device in devices_with_serial]}"
-                        )
-                    else:
-                        continue
-                    up_devices = [
-                        device
-                        for device in devices_with_serial
-                        if not device.status == "offline"
-                    ]
-                    if len(up_devices) == 1:
-                        device_to_keep = up_devices[0]
-                        _logger.debug(
-                            f"Device {device_to_keep.name} is up while the other device(s) with the same serial are down. Removing asset from the downed devices."
-                        )
-                        for device in devices_with_serial:
-                            if device.status == "offline":
-                                devices_copy[device.name].asset = None
-                    elif len(up_devices) > 1:
-                        _logger.error(
-                            f"Multiple devices with asset {serial} are marked as up. Syncing devices without assets."
-                        )
-                        for device in devices_with_serial:
-                            devices_copy[device.name].asset = None
-                    else:
-                        _logger.error(
-                            f"All devices with asset {serial} are marked as down. Syncing devices without assets."
-                        )
-                        for device in devices_with_serial:
-                            devices_copy[device.name].asset = None
-
-        return devices_copy
-
-    def _group_devices_by_type_and_serial(
-        self,
-        devices: Sequence[Device],
-    ) -> dict[ManufacturerStr, dict[ModelStr, dict[SerialStr, list[Device]]]]:
-        """Groups devices by manufacturer, model and serial number"""
-        grouped_dict = {}
-        for device in devices:
-            if not device.asset:
-                continue
-            manufacturer = device.asset.manufacturer
-            model = device.asset.model
-            serial = device.asset.serial
-            if manufacturer not in grouped_dict:
-                grouped_dict[manufacturer] = {}
-            if model not in grouped_dict[manufacturer]:
-                grouped_dict[manufacturer][model] = {}
-            if serial not in grouped_dict[manufacturer][model]:
-                grouped_dict[manufacturer][model][serial] = []
-            grouped_dict[manufacturer][model][serial].append(device)
-        return grouped_dict
-
-    def _generate_nav_token(self, aud: str):
-        now = datetime.now(timezone.utc)
-        jwt_claims = {
-            "exp": (now + self.expiry_delta).timestamp(),
-            "nbf": now.timestamp(),
-            "iat": now.timestamp(),
-            "aud": aud,
-            "iss": self.issuer,
-            "token_type": "access",
-            "endpoints": [
-                "/api/1/netbox",
-                "/api/1/netboxentity",
-                "/api/1/location",
-                "/api/1/room",
-                "/api/1/organization",
-            ],
-            "write": False,
-        }
-        return jwt.encode(jwt_claims, self.private_key, algorithm="RS256")
-
-    def _get_nav_servers(self) -> Iterable[NavServerInfo]:
-        """
-        For each NAV server instance found on the Netbox server, yields a
-        namespace containing that instance's url, owner, and tenant
-        """
-        virtual_machines = self.netbox_api.virtualization.virtual_machines.filter(
-            role="verktykassecnaas", status="active"
-        )
-        devices = self.netbox_api.dcim.devices.filter(
-            role="verktykassecnaas", status="active"
-        )
-        for vm in virtual_machines:
-            if not vm.tags or "navsync" not in [tag.name for tag in vm.tags]:
-                _logger.debug(
-                    f"VM {vm.name} is missing tag 'navsync'. This means it should not be synced. Skipping."
-                )
-                continue
-            if "owner" not in vm.custom_fields:
-                _logger.error(
-                    f"VM {vm.name} is missing custom field 'owner'. Cannot determine NAV server owner. Skipping."
-                )
-                continue
-            if "id" not in vm.custom_fields["owner"]:
-                _logger.error(
-                    f"VM {vm.name} has invalid value for custom field 'owner'. Cannot determine NAV server owner. Skipping."
-                )
-                continue
-            yield NavServerInfo(
-                id=vm.id,
-                url=self._get_url_from_name(vm.name),
-                owner_id=vm.custom_fields["owner"]["id"],
-                tenant_id=vm.tenant.id,
-            )
-
-        for device in devices:
-            if not device.tags or "navsync" not in [tag.name for tag in device.tags]:
-                _logger.debug(
-                    f"Device {device.name} is missing tag 'navsync'. This means it should not be synced. Skipping."
-                )
-                continue
-            asset = self.netbox_api.plugins.inventory.assets.get(device=device)
-            if not asset:
-                _logger.error(
-                    f"Device {device.name} has no asset assigned. Cannot determine NAV server owner. Skipping."
-                )
-                continue
-            if not hasattr(device, "tenant") or device.tenant is None:
-                _logger.error(
-                    f"Device {device.name} has no tenant assigned. Cannot determine NAV server tenant. Skipping."
-                )
-                continue
-            if not hasattr(asset, "owner") or asset.owner is None:
-                _logger.error(
-                    f"Device {device.name}'s asset has no owner assigned. Cannot determine NAV server owner. Skipping."
-                )
-                continue
-            yield NavServerInfo(
-                id=device.id,
-                url=self._get_url_from_name(device.name),
-                owner_id=asset.owner.id,
-                tenant_id=device.tenant.id,
-            )
-
-    def _get_url_from_name(self, device_name: str) -> str:
-        if self.https:
-            return url_with_https(device_name)
-        else:
-            return url_with_http(device_name)
-
     def _get_tag_ids_from_tags(self, tags: list[Union[int, Record]]) -> list[int]:
         tag_ids = []
         for tag in tags:
@@ -1366,7 +929,3 @@ class Syncer:
         return self.upstream_device_types_by_model.get(
             sanitize_slug(manufacturer), {}
         ).get(model)
-
-
-if __name__ == "__main__":
-    main()
