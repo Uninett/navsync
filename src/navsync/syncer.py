@@ -17,6 +17,7 @@ from navsync.parser import (
     Location,
     NameStr,
     NavFetcher,
+    Prefix,
     SerialStr,
     Site,
     SlugStr,
@@ -91,6 +92,7 @@ class Syncer:
         ip_addresses = [
             address for interface in interfaces for address in interface.addresses
         ]
+        prefixes = list(self._get_prefixes_to_sync(nav_data.devices).values())
         self.tags = self._get_or_create_tags(
             nav_data.sites
             + nav_data.locations
@@ -98,6 +100,7 @@ class Syncer:
             + list(assets.values())
             + interfaces
             + ip_addresses
+            + prefixes
         )
         self.upstream_device_types_by_part_number = (
             netbox_helpers.get_device_types_by_part_number(self.netbox_api)
@@ -110,6 +113,7 @@ class Syncer:
         flat_locations = self._sync_sites_and_locations(nav_data.sites)
         self._sync_devices(nav_data.devices, flat_locations)
         self._sync_assets(assets)
+        self._sync_prefixes(nav_data.devices)
         self._sync_interfaces_and_ip_addresses(nav_data.devices)
 
         self._sync_virtual_chassis(nav_data.chassis)
@@ -443,6 +447,99 @@ class Syncer:
                     upstream_site,
                     upstream_device_role,
                     upstream_location,
+                )
+
+    def _sync_prefixes(self, devices: dict[NameStr, Device]):
+        """
+        Registers every prefix NAV reports for the devices' IP addresses, so
+        that the addresses end up nested under a parent prefix in Netbox.
+
+        Netbox nests an IP address under a prefix purely by containment, so
+        there is nothing to link up afterwards: the prefix only has to exist.
+        The same prefix is typically reported by many interfaces on many
+        devices, so they are deduplicated before anything is sent to Netbox.
+        """
+        prefixes = self._get_prefixes_to_sync(devices)
+        if not prefixes:
+            _logger.debug("No prefixes to sync")
+            return
+
+        upstream_prefixes = netbox_helpers.get_prefixes(self.netbox_api)
+        for prefix in prefixes.values():
+            self._sync_prefix(prefix, upstream_prefixes)
+
+    @staticmethod
+    def _get_prefixes_to_sync(devices: dict[NameStr, Device]) -> dict[str, Prefix]:
+        """
+        Returns every distinct prefix reported for the devices' IP addresses,
+        keyed by the prefix itself
+        """
+        return {
+            address.prefix.prefix: address.prefix
+            for device in devices.values()
+            for interface in device.interfaces
+            for address in interface.addresses
+            if address.prefix is not None
+        }
+
+    def _sync_prefix(
+        self, prefix: Prefix, upstream_prefixes: dict[str, Record]
+    ) -> Optional[Record]:
+        """
+        Makes sure the given prefix exists in Netbox, so that the IP addresses
+        inside it get a parent prefix. Returns the prefix, or None if it could
+        neither be created nor found.
+
+        An existing prefix is left untouched apart from its tags: it may have
+        been created and curated by hand, and NAV has nothing to contribute to
+        it beyond its existence.
+
+        Any created prefix is added to 'upstream_prefixes' so that it is found,
+        rather than created again, later in the same sync.
+        """
+        upstream_prefix = upstream_prefixes.get(prefix.prefix)
+        if upstream_prefix is not None:
+            self._update_prefix(prefix, upstream_prefix)
+            return upstream_prefix
+
+        tag_ids = self._convert_tag_names_to_ids(prefix.tags + ["cnaas"], self.tags)
+        new_prefix_dict = {
+            "prefix": prefix.prefix,
+            "status": "active",
+            "tags": tag_ids,
+        }
+
+        _logger.debug(f"Creating new prefix {prefix.prefix}")
+        try:
+            created_prefix = self.netbox_api.ipam.prefixes.create(**new_prefix_dict)
+        except RequestError as e:
+            _logger.error(f"Failed to create prefix {prefix.prefix}: {str(e)}")
+            return None
+        upstream_prefixes[prefix.prefix] = created_prefix
+        return created_prefix
+
+    def _update_prefix(self, prefix: Prefix, upstream_prefix: Record):
+        """
+        Marks an existing Netbox prefix as being seen by navsync, without
+        changing anything else about it.
+        """
+        tag_ids = self._convert_tag_names_to_ids(prefix.tags, self.tags)
+        upstream_prefix_tag_ids = self._get_tag_ids_from_tags(upstream_prefix.tags)
+        tag_ids += [
+            tag_id for tag_id in upstream_prefix_tag_ids if tag_id not in tag_ids
+        ]
+        tag_ids.sort()
+        upstream_prefix.tags = tag_ids
+
+        if upstream_prefix.updates():
+            _logger.debug(
+                f"Updating prefix {upstream_prefix.prefix}: {upstream_prefix.updates()}"
+            )
+            try:
+                upstream_prefix.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to update prefix {upstream_prefix.prefix}: {str(e)}"
                 )
 
     def _sync_interfaces_and_ip_addresses(self, devices: dict[NameStr, Device]):
@@ -1185,6 +1282,7 @@ class Syncer:
                 VirtualChassis,
                 Interface,
                 IpAddress,
+                Prefix,
             ]
         ],
     ) -> dict[NameStr, int]:

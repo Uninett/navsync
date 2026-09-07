@@ -443,3 +443,72 @@ class TestParseInterfacesSkipsLocalAddresses:
         )
         assert [a.address for a in result[0].addresses] == ["158.38.1.13/32"]
         assert not any(a.is_primary for a in result[0].addresses)
+
+
+class TestParsePrefix:
+    def test_prefix_should_be_taken_from_the_nav_prefix(self):
+        result = EntityParser._parse_prefix(address(prefix="158.38.1.0/24"))
+        assert result is not None
+        assert result.prefix == "158.38.1.0/24"
+        assert result.tags == ["navsync"]
+
+    def test_non_canonical_prefix_should_be_normalized(self):
+        """NAV may report a host address where a network address is expected"""
+        result = EntityParser._parse_prefix(address(prefix="158.38.1.13/24"))
+        assert result.prefix == "158.38.1.0/24"
+
+    def test_ipv6_prefix_should_be_normalized(self):
+        result = EntityParser._parse_prefix(
+            address(ip="2001:700::1", prefix="2001:0700:0:0::/64")
+        )
+        assert result.prefix == "2001:700::/64"
+
+    def test_missing_prefix_should_produce_no_prefix(self):
+        assert EntityParser._parse_prefix(address(prefix=None)) is None
+
+    def test_private_prefix_should_not_be_registered(self):
+        assert EntityParser._parse_prefix(address(prefix="10.130.12.0/22")) is None
+        assert EntityParser._parse_prefix(address(prefix="172.16.0.0/12")) is None
+        assert EntityParser._parse_prefix(address(prefix="192.168.1.0/24")) is None
+
+    def test_ipv6_unique_local_prefix_should_not_be_registered(self):
+        assert EntityParser._parse_prefix(address(prefix="fd00::/8")) is None
+
+    def test_host_prefix_should_not_be_registered(self):
+        """A /32 prefix adds nothing beyond the IP address record itself"""
+        assert EntityParser._parse_prefix(address(prefix="158.38.1.13/32")) is None
+
+    def test_ipv6_host_prefix_should_not_be_registered(self):
+        result = EntityParser._parse_prefix(
+            address(ip="2001:700::1", prefix="2001:700::1/128")
+        )
+        assert result is None
+
+    def test_unparseable_prefix_should_produce_no_prefix(self):
+        assert EntityParser._parse_prefix(address(prefix="not-a-prefix")) is None
+        assert EntityParser._parse_prefix(address(prefix="158.38.1.0/99")) is None
+
+
+class TestParseInterfacesPrefixes:
+    def test_address_should_carry_its_prefix(self):
+        parser = make_parser()
+        result = parser._parse_interfaces(navbox())
+        assert result[0].addresses[0].prefix.prefix == "158.38.1.0/24"
+
+    def test_address_should_still_be_a_host_address(self):
+        """Only the prefix is a network; the address keeps its host mask"""
+        parser = make_parser()
+        result = parser._parse_interfaces(navbox())
+        assert result[0].addresses[0].address == "158.38.1.13/32"
+
+    def test_address_whose_prefix_is_private_should_still_be_parsed(self):
+        """A routable address in a private-looking prefix keeps syncing"""
+        parser = make_parser()
+        interfaces = [
+            nav_interface(addresses=[address(ip="158.38.1.13", prefix="10.0.0.0/8")])
+        ]
+        result = parser._parse_interfaces(
+            navbox(ip="158.38.1.13", interfaces=interfaces)
+        )
+        assert result[0].addresses[0].address == "158.38.1.13/32"
+        assert result[0].addresses[0].prefix is None

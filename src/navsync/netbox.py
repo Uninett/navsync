@@ -179,6 +179,11 @@ def host_address(address: str) -> Optional[str]:
         return None
 
 
+def get_prefixes(api: netbox.Api) -> dict[str, Record]:
+    """Returns dict mapping prefix (e.g. '158.38.1.0/24') to prefix"""
+    return {str(prefix.prefix): prefix for prefix in api.ipam.prefixes.all()}
+
+
 def get_nav_servers(api: netbox.Api, https: bool) -> Iterable[NavServerInfo]:
     """
     For each NAV server instance found on the Netbox server, yields a namespace

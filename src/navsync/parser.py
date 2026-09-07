@@ -3,7 +3,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import IntEnum
-from ipaddress import ip_address
+from ipaddress import ip_address, ip_network
 from typing import Callable, Iterable, Literal, NewType, Optional, Self, Sequence
 from urllib.parse import urljoin
 
@@ -96,6 +96,15 @@ class Asset:
 
 
 @dataclass
+class Prefix:
+    """Information about a Netbox prefix instance"""
+
+    prefix: str
+    """The prefix in CIDR notation, e.g. '158.38.1.0/24'"""
+    tags: list[str]
+
+
+@dataclass
 class IpAddress:
     """Information about a Netbox IP address instance"""
 
@@ -106,6 +115,11 @@ class IpAddress:
     """
     Whether this address should become the device's primary IP for its address
     family. Only the address matching the navbox's management IP is primary.
+    """
+    prefix: Optional[Prefix] = None
+    """
+    The prefix this address belongs to according to NAV, if NAV reported a
+    usable one. Registered in Netbox so the address gets a parent prefix.
     """
 
 
@@ -616,6 +630,7 @@ class EntityParser:
                     address=self._ip_with_mask(address),
                     tags=["navsync"],
                     is_primary=bool(navbox.ip) and address.ip == navbox.ip,
+                    prefix=self._parse_prefix(address),
                 )
                 for address in nav_interface.addresses
                 if self._is_globally_routable(address.ip)
@@ -650,6 +665,48 @@ class EntityParser:
                     navbox.sysname,
                 )
         return interfaces
+
+    @staticmethod
+    def _parse_prefix(address: NavGwPortPrefix) -> Optional["Prefix"]:
+        """
+        Returns the prefix the given IP address belongs to, so that it can be
+        registered in Netbox as the address's parent prefix.
+
+        Returns None if NAV reported no prefix, if the prefix is not globally
+        routable, or if it is not a usable network. No host prefix is invented
+        for an address whose prefix NAV does not know: a /32 or /128 prefix in
+        Netbox adds no information beyond the IP address record itself.
+        """
+        if not address.prefix:
+            return None
+        try:
+            # 'strict=False' also canonicalizes the prefix, e.g. from
+            # '158.38.1.13/24' to '158.38.1.0/24', which is what Netbox stores
+            network = ip_network(address.prefix, strict=False)
+        except ValueError:
+            _logger.warning(
+                "NAV reported the unparseable prefix %r for IP address %s, not "
+                "registering it as a prefix",
+                address.prefix,
+                address.ip,
+            )
+            return None
+        if not network.is_global:
+            _logger.debug(
+                "Prefix %s of IP address %s is not globally routable, not "
+                "registering it",
+                network,
+                address.ip,
+            )
+            return None
+        if network.prefixlen == network.max_prefixlen:
+            _logger.debug(
+                "Not registering host prefix %s for IP address %s",
+                network,
+                address.ip,
+            )
+            return None
+        return Prefix(prefix=str(network), tags=["navsync"])
 
     @staticmethod
     def _is_globally_routable(ip: str) -> bool:
