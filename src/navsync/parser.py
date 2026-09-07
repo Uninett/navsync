@@ -312,13 +312,6 @@ class EntityParser:
             for e in virtual_chassis.children
             if e.physical_class == IANAPhysicalClass.CHASSIS
         ]
-
-        if len(physical_chassises) == 1:
-            _logger.warning(
-                f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
-                f"physical chassis. Cannot parse as virtual chassis."
-            )
-            raise NextAttempt
         if len(physical_chassises) == 0:
             _logger.warning(
                 f"Navbox {navbox.sysname} looks like a virtual chassis, but with 0 "
@@ -380,13 +373,6 @@ class EntityParser:
         ):
             _logger.warning(
                 f"Failed to find matching serial number between virtual chassis and one of its physical chassis in Navbox {navbox.sysname}. Cannot parse as juniper virtual chassis."
-            )
-            raise NextAttempt
-
-        if len(physical_chassises) == 1:
-            _logger.warning(
-                f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
-                f"physical chassis. Cannot parse as juniper virtual chassis."
             )
             raise NextAttempt
 
