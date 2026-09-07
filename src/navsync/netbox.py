@@ -9,14 +9,26 @@ Every function takes the Netbox API as its first argument, so they can be used
 without a syncer instance.
 """
 
-from typing import Optional, Sequence
+import logging
+from typing import Iterable, Optional, Sequence
 
 import pynetbox.core.api as netbox
 from pynetbox.core.response import Record
 
+from navsync.utils import (
+    NavServerInfo,
+    url_with_http,
+    url_with_https,
+)
+
 NameStr = str
 SlugStr = str
 SerialStr = str
+
+# The Netbox role a device or VM must have to be treated as a NAV instance
+VERKTOYKASSE_ROLE = "verktykassecnaas"
+
+_logger = logging.getLogger(__name__)
 
 
 def get_tenants(api: netbox.Api) -> dict[NameStr, Record]:
@@ -115,6 +127,80 @@ def get_assets(api: netbox.Api) -> dict[int, dict[SerialStr, Record]]:
             continue
         assets.setdefault(asset.device_type.id, {})[asset.serial] = asset
     return assets
+
+
+def get_nav_servers(api: netbox.Api, https: bool) -> Iterable[NavServerInfo]:
+    """
+    For each NAV server instance found on the Netbox server, yields a namespace
+    containing that instance's url, owner, and tenant.
+
+    A NAV instance is a device or VM with the 'verktøykasse' role, and its name
+    is the host to reach it on.
+
+    :param https: whether the NAV instances are reachable over https
+    """
+    virtual_machines = api.virtualization.virtual_machines.filter(
+        role=VERKTOYKASSE_ROLE, status="active"
+    )
+    devices = api.dcim.devices.filter(role=VERKTOYKASSE_ROLE, status="active")
+    for vm in virtual_machines:
+        if not vm.tags or "navsync" not in [tag.name for tag in vm.tags]:
+            _logger.debug(
+                f"VM {vm.name} is missing tag 'navsync'. This means it should not be synced. Skipping."
+            )
+            continue
+        if "owner" not in vm.custom_fields:
+            _logger.error(
+                f"VM {vm.name} is missing custom field 'owner'. Cannot determine NAV server owner. Skipping."
+            )
+            continue
+        if "id" not in vm.custom_fields["owner"]:
+            _logger.error(
+                f"VM {vm.name} has invalid value for custom field 'owner'. Cannot determine NAV server owner. Skipping."
+            )
+            continue
+        yield NavServerInfo(
+            id=vm.id,
+            url=_url_from_name(vm.name, https),
+            owner_id=vm.custom_fields["owner"]["id"],
+            tenant_id=vm.tenant.id,
+        )
+
+    for device in devices:
+        if not device.tags or "navsync" not in [tag.name for tag in device.tags]:
+            _logger.debug(
+                f"Device {device.name} is missing tag 'navsync'. This means it should not be synced. Skipping."
+            )
+            continue
+        asset = api.plugins.inventory.assets.get(device=device)
+        if not asset:
+            _logger.error(
+                f"Device {device.name} has no asset assigned. Cannot determine NAV server owner. Skipping."
+            )
+            continue
+        if not hasattr(device, "tenant") or device.tenant is None:
+            _logger.error(
+                f"Device {device.name} has no tenant assigned. Cannot determine NAV server tenant. Skipping."
+            )
+            continue
+        if not hasattr(asset, "owner") or asset.owner is None:
+            _logger.error(
+                f"Device {device.name}'s asset has no owner assigned. Cannot determine NAV server owner. Skipping."
+            )
+            continue
+        yield NavServerInfo(
+            id=device.id,
+            url=_url_from_name(device.name, https),
+            owner_id=asset.owner.id,
+            tenant_id=device.tenant.id,
+        )
+
+
+def _url_from_name(device_name: str, https: bool) -> str:
+    if https:
+        return url_with_https(device_name)
+    else:
+        return url_with_http(device_name)
 
 
 # The functions below search collections that have already been fetched, rather

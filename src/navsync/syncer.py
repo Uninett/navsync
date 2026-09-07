@@ -1,11 +1,8 @@
 import argparse
 import logging
-import time
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
-from typing import Iterable, Optional, Sequence, Union
+from datetime import timedelta
+from typing import Optional, Sequence, Union
 
-import jwt
 import pynetbox.core.api as netbox
 from dynaconf import Dynaconf
 from pynetbox.core.query import RequestError
@@ -16,34 +13,17 @@ from navsync import netbox as netbox_helpers
 from navsync.parser import (
     Asset,
     Device,
-    EntityParser,
     Location,
-    LocationHierarchyParser,
-    ManufacturerStr,
-    ModelStr,
     NameStr,
+    NavFetcher,
     SerialStr,
     Site,
     SlugStr,
     VirtualChassis,
 )
-from navsync.utils import (
-    NavServerInfo,
-    init_logging,
-    sanitize_slug,
-    url_with_http,
-    url_with_https,
-)
+from navsync.utils import init_logging, sanitize_slug
 
 _logger = logging.getLogger(__name__)
-
-
-@dataclass
-class NavData:
-    sites: list[Site] = field(default_factory=list)
-    locations: list[Location] = field(default_factory=list)
-    chassis: dict[NameStr, VirtualChassis] = field(default_factory=dict)
-    devices: dict[NameStr, Device] = field(default_factory=dict)
 
 
 EXAMPLE_CONFIG = """\
@@ -131,10 +111,10 @@ class Syncer:
     Use :meth sync: to sync
     """
 
+    netbox_api: netbox.Api
     private_key: str
     expiry_delta: timedelta
     issuer: str
-    netbox_api: netbox.Api
     https: bool
     nosync: bool
 
@@ -160,7 +140,15 @@ class Syncer:
         server to Netbox
         """
         self.tenants = netbox_helpers.get_tenants(self.netbox_api)
-        nav_data = self._fetch_nav_data()
+        nav_fetcher = NavFetcher(
+            private_key=self.private_key,
+            expiry_delta=self.expiry_delta,
+            issuer=self.issuer,
+            netbox_tenants={name: t.id for name, t in self.tenants.items()},
+        )
+        nav_data = nav_fetcher.fetch(
+            nav_servers=netbox_helpers.get_nav_servers(self.netbox_api, self.https)
+        )
         assets = {
             device.name: device.asset
             for device in nav_data.devices.values()
@@ -987,229 +975,6 @@ class Syncer:
                     _logger.error(
                         f"Could not register device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}: {str(e)}"
                     )
-
-    def _fetch_nav_data(self) -> NavData:
-        """Fetches all data from all NAV servers in a single pass."""
-        result = NavData()
-        sites: dict[str, Site] = {}  # keyed by name for duplicate detection
-        all_entities: list[VirtualChassis | Device] = []
-
-        for nav_server in self._get_nav_servers():
-            token = self._generate_nav_token(aud=nav_server.url)
-            # Sleep to avoid issues with the `nbf` claim.
-            time.sleep(1)
-            server_sites, server_locations = LocationHierarchyParser(
-                nav_server, token
-            ).get_sites_and_locations()
-
-            for site in server_sites.values():
-                if site.name in sites:
-                    raise ValueError(
-                        f"Duplicate site name {site.name} found across NAV servers. Site names must be unique across all NAV servers."
-                    )
-                sites[site.name] = site
-            result.locations.extend(server_locations.values())
-
-            # Sleep to avoid issues with the `nbf` claim.
-            time.sleep(1)
-            all_entities.extend(
-                EntityParser(
-                    nav_server,
-                    token,
-                    locations=server_locations,
-                    netbox_tenants={name: t.id for name, t in self.tenants.items()},
-                ).parse()
-            )
-
-        result.chassis, result.devices = self._get_virtual_chassis_and_devices(
-            all_entities
-        )
-        result.sites = list(sites.values())
-        result.devices = self._handle_duplicate_serials(result.devices)
-        return result
-
-    def _get_virtual_chassis_and_devices(
-        self,
-        entities: list[VirtualChassis | Device],
-    ) -> tuple[dict[NameStr, VirtualChassis], dict[NameStr, Device]]:
-        virtual_chassises: dict[NameStr, VirtualChassis] = {}
-        devices: dict[NameStr, Device] = {}
-        for entity in entities:
-            match entity:
-                case VirtualChassis():
-                    if entity.name in virtual_chassises:
-                        _logger.error(
-                            f"Duplicate virtual chassis name {entity.name}. Dropping duplicate."
-                        )
-                        continue
-                    virtual_chassises[entity.name] = entity
-                    for device in entity.devices:
-                        if device.name in devices:
-                            _logger.error(
-                                f"Duplicate device name {device.name}. Dropping duplicate."
-                            )
-                            continue
-                        devices[device.name] = device
-                case Device():
-                    if entity.name in devices:
-                        _logger.error(
-                            f"Duplicate physical chassis name {entity.name}. Dropping duplicate."
-                        )
-                        continue
-                    devices[entity.name] = entity
-                case _:
-                    raise TypeError(f"Unexpected entity type {type(entity)}")
-        return virtual_chassises, devices
-
-    def _handle_duplicate_serials(self, devices: dict[NameStr, Device]):
-        devices_copy = devices.copy()
-        serials = self._group_devices_by_type_and_serial(devices.values())
-        for manufacturer, serials_by_manufacturer in serials.items():
-            for model, serials_by_model in serials_by_manufacturer.items():
-                for serial, devices_with_serial in serials_by_model.items():
-                    if len(devices_with_serial) > 1:
-                        _logger.warning(
-                            f"Duplicate asset {serial} found for manufacturer {manufacturer} and model {model} in devices {[device.name for device in devices_with_serial]}"
-                        )
-                    else:
-                        continue
-                    up_devices = [
-                        device
-                        for device in devices_with_serial
-                        if not device.status == "offline"
-                    ]
-                    if len(up_devices) == 1:
-                        device_to_keep = up_devices[0]
-                        _logger.debug(
-                            f"Device {device_to_keep.name} is up while the other device(s) with the same serial are down. Removing asset from the downed devices."
-                        )
-                        for device in devices_with_serial:
-                            if device.status == "offline":
-                                devices_copy[device.name].asset = None
-                    elif len(up_devices) > 1:
-                        _logger.error(
-                            f"Multiple devices with asset {serial} are marked as up. Syncing devices without assets."
-                        )
-                        for device in devices_with_serial:
-                            devices_copy[device.name].asset = None
-                    else:
-                        _logger.error(
-                            f"All devices with asset {serial} are marked as down. Syncing devices without assets."
-                        )
-                        for device in devices_with_serial:
-                            devices_copy[device.name].asset = None
-
-        return devices_copy
-
-    def _group_devices_by_type_and_serial(
-        self,
-        devices: Sequence[Device],
-    ) -> dict[ManufacturerStr, dict[ModelStr, dict[SerialStr, list[Device]]]]:
-        """Groups devices by manufacturer, model and serial number"""
-        grouped_dict = {}
-        for device in devices:
-            if not device.asset:
-                continue
-            manufacturer = device.asset.manufacturer
-            model = device.asset.model
-            serial = device.asset.serial
-            if manufacturer not in grouped_dict:
-                grouped_dict[manufacturer] = {}
-            if model not in grouped_dict[manufacturer]:
-                grouped_dict[manufacturer][model] = {}
-            if serial not in grouped_dict[manufacturer][model]:
-                grouped_dict[manufacturer][model][serial] = []
-            grouped_dict[manufacturer][model][serial].append(device)
-        return grouped_dict
-
-    def _generate_nav_token(self, aud: str):
-        now = datetime.now(timezone.utc)
-        jwt_claims = {
-            "exp": (now + self.expiry_delta).timestamp(),
-            "nbf": now.timestamp(),
-            "iat": now.timestamp(),
-            "aud": aud,
-            "iss": self.issuer,
-            "token_type": "access",
-            "endpoints": [
-                "/api/1/netbox",
-                "/api/1/netboxentity",
-                "/api/1/location",
-                "/api/1/room",
-                "/api/1/organization",
-            ],
-            "write": False,
-        }
-        return jwt.encode(jwt_claims, self.private_key, algorithm="RS256")
-
-    def _get_nav_servers(self) -> Iterable[NavServerInfo]:
-        """
-        For each NAV server instance found on the Netbox server, yields a
-        namespace containing that instance's url, owner, and tenant
-        """
-        virtual_machines = self.netbox_api.virtualization.virtual_machines.filter(
-            role="verktykassecnaas", status="active"
-        )
-        devices = self.netbox_api.dcim.devices.filter(
-            role="verktykassecnaas", status="active"
-        )
-        for vm in virtual_machines:
-            if not vm.tags or "navsync" not in [tag.name for tag in vm.tags]:
-                _logger.debug(
-                    f"VM {vm.name} is missing tag 'navsync'. This means it should not be synced. Skipping."
-                )
-                continue
-            if "owner" not in vm.custom_fields:
-                _logger.error(
-                    f"VM {vm.name} is missing custom field 'owner'. Cannot determine NAV server owner. Skipping."
-                )
-                continue
-            if "id" not in vm.custom_fields["owner"]:
-                _logger.error(
-                    f"VM {vm.name} has invalid value for custom field 'owner'. Cannot determine NAV server owner. Skipping."
-                )
-                continue
-            yield NavServerInfo(
-                id=vm.id,
-                url=self._get_url_from_name(vm.name),
-                owner_id=vm.custom_fields["owner"]["id"],
-                tenant_id=vm.tenant.id,
-            )
-
-        for device in devices:
-            if not device.tags or "navsync" not in [tag.name for tag in device.tags]:
-                _logger.debug(
-                    f"Device {device.name} is missing tag 'navsync'. This means it should not be synced. Skipping."
-                )
-                continue
-            asset = self.netbox_api.plugins.inventory.assets.get(device=device)
-            if not asset:
-                _logger.error(
-                    f"Device {device.name} has no asset assigned. Cannot determine NAV server owner. Skipping."
-                )
-                continue
-            if not hasattr(device, "tenant") or device.tenant is None:
-                _logger.error(
-                    f"Device {device.name} has no tenant assigned. Cannot determine NAV server tenant. Skipping."
-                )
-                continue
-            if not hasattr(asset, "owner") or asset.owner is None:
-                _logger.error(
-                    f"Device {device.name}'s asset has no owner assigned. Cannot determine NAV server owner. Skipping."
-                )
-                continue
-            yield NavServerInfo(
-                id=device.id,
-                url=self._get_url_from_name(device.name),
-                owner_id=asset.owner.id,
-                tenant_id=device.tenant.id,
-            )
-
-    def _get_url_from_name(self, device_name: str) -> str:
-        if self.https:
-            return url_with_https(device_name)
-        else:
-            return url_with_http(device_name)
 
     def _get_tag_ids_from_tags(self, tags: list[Union[int, Record]]) -> list[int]:
         tag_ids = []
