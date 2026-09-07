@@ -168,7 +168,7 @@ class TestGetInterfacesWithAddresses:
         assert result[0].description == "some descr"
 
 
-def address(ip="10.0.0.1", prefix="10.0.0.0/24"):
+def address(ip="158.38.1.13", prefix="158.38.1.0/24"):
     return NavGwPortPrefix(ip=ip, prefix=prefix, virtual=False)
 
 
@@ -176,23 +176,24 @@ class TestIpWithMask:
     """Addresses are always registered as single-host addresses"""
 
     def test_address_should_get_a_host_mask(self):
-        assert EntityParser._ip_with_mask(address(prefix=None)) == "10.0.0.1/32"
+        assert EntityParser._ip_with_mask(address(prefix=None)) == "158.38.1.13/32"
 
     def test_prefix_mask_length_should_be_ignored(self):
         """The prefix an address sits in is not expressed on the address"""
         assert (
-            EntityParser._ip_with_mask(address(prefix="10.0.0.0/24")) == "10.0.0.1/32"
+            EntityParser._ip_with_mask(address(prefix="158.38.1.0/24"))
+            == "158.38.1.13/32"
         )
 
     def test_ipv6_address_should_get_a_host_mask(self):
-        result = EntityParser._ip_with_mask(address(ip="2001:db8::1", prefix=None))
-        assert result == "2001:db8::1/128"
+        result = EntityParser._ip_with_mask(address(ip="2001:700::1", prefix=None))
+        assert result == "2001:700::1/128"
 
     def test_ipv6_prefix_mask_length_should_be_ignored(self):
         result = EntityParser._ip_with_mask(
-            address(ip="2001:db8::1", prefix="2001:db8::/64")
+            address(ip="2001:700::1", prefix="2001:700::/64")
         )
-        assert result == "2001:db8::1/128"
+        assert result == "2001:700::1/128"
 
 
 def make_parser():
@@ -214,7 +215,7 @@ def nav_interface(name="Vlan10", addresses=None, description=""):
     )
 
 
-def navbox(ip="10.0.0.1", interfaces=None):
+def navbox(ip="158.38.1.13", interfaces=None):
     box = MagicMock()
     box.sysname = "sw-1.example.org"
     box.ip = ip
@@ -228,7 +229,7 @@ class TestParseInterfaces:
         result = parser._parse_interfaces(navbox())
         assert len(result) == 1
         assert result[0].name == "Vlan10"
-        assert [a.address for a in result[0].addresses] == ["10.0.0.1/32"]
+        assert [a.address for a in result[0].addresses] == ["158.38.1.13/32"]
         assert "navsync" in result[0].tags
 
     def test_only_the_management_ip_should_be_primary(self):
@@ -236,39 +237,43 @@ class TestParseInterfaces:
         interfaces = [
             nav_interface(
                 addresses=[
-                    address(ip="10.0.0.1", prefix="10.0.0.0/24"),
-                    address(ip="2001:db8::1", prefix="2001:db8::/64"),
+                    address(ip="158.38.1.13", prefix="158.38.1.0/24"),
+                    address(ip="2001:700::1", prefix="2001:700::/64"),
                 ]
             )
         ]
-        result = parser._parse_interfaces(navbox(ip="10.0.0.1", interfaces=interfaces))
+        result = parser._parse_interfaces(
+            navbox(ip="158.38.1.13", interfaces=interfaces)
+        )
         primary = {a.address: a.is_primary for a in result[0].addresses}
-        assert primary == {"10.0.0.1/32": True, "2001:db8::1/128": False}
+        assert primary == {"158.38.1.13/32": True, "2001:700::1/128": False}
 
     def test_an_ipv6_management_ip_should_be_the_primary_one(self):
         parser = make_parser()
         interfaces = [
             nav_interface(
                 addresses=[
-                    address(ip="10.0.0.1", prefix="10.0.0.0/24"),
-                    address(ip="2001:db8::1", prefix="2001:db8::/64"),
+                    address(ip="158.38.1.13", prefix="158.38.1.0/24"),
+                    address(ip="2001:700::1", prefix="2001:700::/64"),
                 ]
             )
         ]
         result = parser._parse_interfaces(
-            navbox(ip="2001:db8::1", interfaces=interfaces)
+            navbox(ip="2001:700::1", interfaces=interfaces)
         )
         primary = {a.address: a.is_primary for a in result[0].addresses}
-        assert primary == {"10.0.0.1/32": False, "2001:db8::1/128": True}
+        assert primary == {"158.38.1.13/32": False, "2001:700::1/128": True}
 
     def test_non_management_addresses_should_still_be_registered(self):
         """All addresses are synced, only the primary flag is selective"""
         parser = make_parser()
         interfaces = [
-            nav_interface(name="Vlan10", addresses=[address(ip="10.0.0.1")]),
-            nav_interface(name="Vlan20", addresses=[address(ip="10.0.1.1")]),
+            nav_interface(name="Vlan10", addresses=[address(ip="158.38.1.13")]),
+            nav_interface(name="Vlan20", addresses=[address(ip="158.38.2.13")]),
         ]
-        result = parser._parse_interfaces(navbox(ip="10.0.0.1", interfaces=interfaces))
+        result = parser._parse_interfaces(
+            navbox(ip="158.38.1.13", interfaces=interfaces)
+        )
         assert len(result) == 2
         assert sum(1 for i in result for a in i.addresses if a.is_primary) == 1, (
             "exactly one address is primary"
@@ -282,7 +287,7 @@ class TestParseInterfaces:
 
     def test_management_ip_not_on_any_interface_should_have_no_primary(self):
         parser = make_parser()
-        result = parser._parse_interfaces(navbox(ip="192.168.99.99"))
+        result = parser._parse_interfaces(navbox(ip="158.38.99.99"))
         assert len(result) == 1
         assert not any(a.is_primary for a in result[0].addresses)
 
@@ -322,8 +327,8 @@ def make_api_with_session(status_code=200, json_body=None, url_seen=None):
 
 class TestGetSingle:
     def test_detail_object_should_be_returned(self):
-        api = make_api_with_session(json_body={"gw_ip": "10.0.0.1"})
-        assert api.get_single("gwportprefix/10.0.0.1/") == {"gw_ip": "10.0.0.1"}
+        api = make_api_with_session(json_body={"gw_ip": "158.38.1.13"})
+        assert api.get_single("gwportprefix/10.0.0.1/") == {"gw_ip": "158.38.1.13"}
 
     def test_missing_object_should_return_none(self):
         api = make_api_with_session(status_code=404, json_body={"detail": "Not found."})
@@ -358,3 +363,83 @@ class TestGetSingle:
         api = make_api_with_session(status_code=500, json_body={})
         with pytest.raises(ConnectionError):
             api.get_single("gwportprefix/10.0.0.1/")
+
+
+class TestIsGloballyRoutable:
+    def test_public_addresses_should_be_routable(self):
+        assert EntityParser._is_globally_routable("158.38.1.13")
+        assert EntityParser._is_globally_routable("2001:700::1")
+
+    def test_rfc1918_addresses_should_not_be_routable(self):
+        assert not EntityParser._is_globally_routable("10.130.12.1")
+        assert not EntityParser._is_globally_routable("172.16.5.1")
+        assert not EntityParser._is_globally_routable("192.168.1.1")
+
+    def test_loopback_addresses_should_not_be_routable(self):
+        assert not EntityParser._is_globally_routable("127.0.0.1")
+        assert not EntityParser._is_globally_routable("::1")
+
+    def test_link_local_addresses_should_not_be_routable(self):
+        assert not EntityParser._is_globally_routable("169.254.1.1")
+        assert not EntityParser._is_globally_routable("fe80::1")
+
+    def test_ipv6_unique_local_addresses_should_not_be_routable(self):
+        assert not EntityParser._is_globally_routable("fd00::1")
+
+    def test_unparseable_addresses_should_not_be_routable(self):
+        assert not EntityParser._is_globally_routable("not-an-address")
+        assert not EntityParser._is_globally_routable("")
+
+
+class TestParseInterfacesSkipsLocalAddresses:
+    def test_private_addresses_should_not_be_parsed(self):
+        parser = make_parser()
+        interfaces = [nav_interface(addresses=[address(ip="10.130.12.1")])]
+        result = parser._parse_interfaces(
+            navbox(ip="158.38.1.13", interfaces=interfaces)
+        )
+        assert result == [], "an interface with only private addresses is skipped"
+
+    def test_only_the_routable_addresses_of_an_interface_should_be_parsed(self):
+        parser = make_parser()
+        interfaces = [
+            nav_interface(
+                addresses=[
+                    address(ip="158.38.1.13"),
+                    address(ip="10.130.12.1"),
+                    address(ip="2001:700::1", prefix="2001:700::/64"),
+                ]
+            )
+        ]
+        result = parser._parse_interfaces(
+            navbox(ip="158.38.1.13", interfaces=interfaces)
+        )
+        assert [a.address for a in result[0].addresses] == [
+            "158.38.1.13/32",
+            "2001:700::1/128",
+        ]
+
+    def test_interfaces_with_only_private_addresses_should_be_dropped(self):
+        parser = make_parser()
+        interfaces = [
+            nav_interface(name="Vlan10", addresses=[address(ip="158.38.1.13")]),
+            nav_interface(name="Vlan20", addresses=[address(ip="192.168.1.1")]),
+        ]
+        result = parser._parse_interfaces(
+            navbox(ip="158.38.1.13", interfaces=interfaces)
+        )
+        assert [i.name for i in result] == ["Vlan10"]
+
+    def test_private_management_ip_should_not_become_primary(self):
+        """A private management IP is filtered out like any other address"""
+        parser = make_parser()
+        interfaces = [
+            nav_interface(
+                addresses=[address(ip="10.130.12.1"), address(ip="158.38.1.13")]
+            )
+        ]
+        result = parser._parse_interfaces(
+            navbox(ip="10.130.12.1", interfaces=interfaces)
+        )
+        assert [a.address for a in result[0].addresses] == ["158.38.1.13/32"]
+        assert not any(a.is_primary for a in result[0].addresses)

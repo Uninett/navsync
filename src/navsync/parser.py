@@ -3,6 +3,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import IntEnum
+from ipaddress import ip_address
 from typing import Callable, Iterable, Literal, NewType, Optional, Self, Sequence
 from urllib.parse import urljoin
 
@@ -617,6 +618,7 @@ class EntityParser:
                     is_primary=bool(navbox.ip) and address.ip == navbox.ip,
                 )
                 for address in nav_interface.addresses
+                if self._is_globally_routable(address.ip)
             ]
             if not addresses:
                 continue
@@ -634,12 +636,39 @@ class EntityParser:
             for interface in interfaces
             for address in interface.addresses
         ):
-            _logger.warning(
-                f"Found no interface in NAV with the management IP address "
-                f"{navbox.ip} of navbox {navbox.sysname}. Syncing without a "
-                "primary IP address."
-            )
+            if self._is_globally_routable(navbox.ip):
+                _logger.warning(
+                    f"Found no interface in NAV with the management IP address "
+                    f"{navbox.ip} of navbox {navbox.sysname}. Syncing without a "
+                    "primary IP address."
+                )
+            else:
+                _logger.debug(
+                    "Management IP address %s of navbox %s is not globally "
+                    "routable. Syncing without a primary IP address.",
+                    navbox.ip,
+                    navbox.sysname,
+                )
         return interfaces
+
+    @staticmethod
+    def _is_globally_routable(ip: str) -> bool:
+        """
+        Returns whether the given IP address is globally routable, i.e. not a
+        private, loopback or link-local address.
+
+        Only globally routable addresses are registered in Netbox. Private
+        addresses are typically reused across several organizations, so they say
+        little about the device holding them and would collide with each other
+        in Netbox's global table.
+        """
+        try:
+            return ip_address(ip).is_global
+        except ValueError:
+            _logger.warning(
+                "NAV reported the unparseable IP address %r, not syncing it", ip
+            )
+            return False
 
     @staticmethod
     def _ip_with_mask(address: NavGwPortPrefix) -> str:
