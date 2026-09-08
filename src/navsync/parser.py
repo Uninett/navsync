@@ -312,13 +312,6 @@ class EntityParser:
             for e in virtual_chassis.children
             if e.physical_class == IANAPhysicalClass.CHASSIS
         ]
-
-        if len(physical_chassises) == 1:
-            _logger.warning(
-                f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
-                f"physical chassis. Cannot parse as virtual chassis."
-            )
-            raise NextAttempt
         if len(physical_chassises) == 0:
             _logger.warning(
                 f"Navbox {navbox.sysname} looks like a virtual chassis, but with 0 "
@@ -380,13 +373,6 @@ class EntityParser:
         ):
             _logger.warning(
                 f"Failed to find matching serial number between virtual chassis and one of its physical chassis in Navbox {navbox.sysname}. Cannot parse as juniper virtual chassis."
-            )
-            raise NextAttempt
-
-        if len(physical_chassises) == 1:
-            _logger.warning(
-                f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
-                f"physical chassis. Cannot parse as juniper virtual chassis."
             )
             raise NextAttempt
 
@@ -504,7 +490,7 @@ class EntityParser:
         position: Optional[int] = None,
     ) -> Device:
         if position is not None:
-            sysname = f"{navbox.sysname}-{position}"
+            sysname = self._insert_vc_position_in_sysname(navbox.sysname, position)
         else:
             sysname = navbox.sysname
         if physical_chassis:
@@ -534,6 +520,16 @@ class EntityParser:
             status="active" if is_up else "offline",
             url=url,
         )
+
+    @staticmethod
+    def _insert_vc_position_in_sysname(sysname: str, position: int) -> str:
+        """
+        Adds a virtual chassis position to a sysname by inserting it before the first ".",
+        e.g. sw1.c.uninett.no with position 1 becomes sw1-1.c.uninett.no. Sysnames without
+        a domain part are simply suffixed.
+        """
+        hostname, separator, domain = sysname.partition(".")
+        return f"{hostname}-{position}{separator}{domain}"
 
     def _get_device_role_from_navbox(self, navbox: NavBox) -> str:
         category = navbox.category
