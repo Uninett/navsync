@@ -115,6 +115,9 @@ class Syncer:
         self._sync_assets(assets)
         self._sync_prefixes(nav_data.devices)
         self._sync_interfaces_and_ip_addresses(nav_data.devices)
+        # Must be run after _sync_interfaces_and_ip_addresses so all
+        # addresses and prefixes are up to date before we deprecate
+        self._deprecate_unused_ip_addresses_and_prefixes()
 
         self._sync_virtual_chassis(nav_data.chassis)
 
@@ -523,6 +526,14 @@ class Syncer:
         Marks an existing Netbox prefix as being seen by navsync, without
         changing anything else about it.
         """
+        # A prefix NAV reports is in use again, so a deprecation from an
+        # earlier sync no longer holds
+        if str(upstream_prefix.status) == "Deprecated":
+            _logger.debug(
+                f"Prefix {upstream_prefix.prefix} is in use again, marking it active"
+            )
+            upstream_prefix.status = "active"
+
         tag_ids = self._convert_tag_names_to_ids(prefix.tags, self.tags)
         upstream_prefix_tag_ids = self._get_tag_ids_from_tags(upstream_prefix.tags)
         tag_ids += [
@@ -541,6 +552,85 @@ class Syncer:
                 _logger.error(
                     f"Failed to update prefix {upstream_prefix.prefix}: {str(e)}"
                 )
+
+    def _deprecate_unused_ip_addresses_and_prefixes(self):
+        """
+        Marks the IP addresses navsync owns that are no longer in use as
+        deprecated, along with the prefixes that no longer hold any addresses.
+
+        Must run after the interfaces and IP addresses have been synced: an
+        address NAV reports is assigned to an interface by then, so being
+        unassigned is what identifies an address as no longer in use. That also
+        means an address someone has put back on an interface themselves is
+        left alone, whether or not NAV knows about it.
+        """
+        self._deprecate_unassigned_ip_addresses()
+        self._deprecate_empty_prefixes()
+
+    def _deprecate_unassigned_ip_addresses(self):
+        """
+        Marks every IP address navsync owns that is not assigned to anything as
+        deprecated. The address itself is kept, so it can be picked up again if
+        it comes back into use.
+        """
+        for upstream_ip_address in self.netbox_api.ipam.ip_addresses.filter(
+            tag=["navsync", "cnaas"]
+        ):
+            if upstream_ip_address.assigned_object_id is not None:
+                continue
+            if str(upstream_ip_address.status) == "Deprecated":
+                continue
+            _logger.debug(
+                f"Deprecating unused IP address {upstream_ip_address.address}"
+            )
+            upstream_ip_address.status = "deprecated"
+            try:
+                upstream_ip_address.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to deprecate IP address {upstream_ip_address.address}: {e}"
+                )
+
+    def _deprecate_empty_prefixes(self):
+        """
+        Marks every prefix navsync owns that no longer holds any IP address as
+        deprecated.
+
+        A prefix that still holds addresses stays active even when navsync did
+        not register those addresses itself, since something in it is evidently
+        still in use.
+        """
+        for upstream_prefix in self.netbox_api.ipam.prefixes.filter(
+            tag=["navsync", "cnaas"]
+        ):
+            if str(upstream_prefix.status) == "Deprecated":
+                continue
+            if self._prefix_holds_ip_addresses(upstream_prefix):
+                continue
+            _logger.debug(f"Deprecating empty prefix {upstream_prefix.prefix}")
+            upstream_prefix.status = "deprecated"
+            try:
+                upstream_prefix.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to deprecate prefix {upstream_prefix.prefix}: {e}"
+                )
+
+    def _prefix_holds_ip_addresses(self, upstream_prefix: Record) -> bool:
+        """
+        Returns whether any IP address that is still in use sits inside the
+        given prefix, no matter who registered it.
+
+        Deprecated addresses do not count: a prefix holding nothing but
+        addresses that have themselves gone out of use is no longer in use
+        either. Addresses registered by someone else do count, since something
+        in the prefix is evidently still live.
+        """
+        return bool(
+            self.netbox_api.ipam.ip_addresses.count(
+                parent=str(upstream_prefix.prefix), status__n="deprecated"
+            )
+        )
 
     def _sync_interfaces_and_ip_addresses(self, devices: dict[NameStr, Device]):
         """
@@ -754,6 +844,15 @@ class Syncer:
             upstream_ip_address.assigned_object_type = "dcim.interface"
             upstream_ip_address.assigned_object_id = upstream_interface.id
 
+        # An address NAV reports is in use again, so a deprecation from an
+        # earlier sync no longer holds
+        if str(upstream_ip_address.status) == "Deprecated":
+            _logger.debug(
+                f"IP address {upstream_ip_address.address} is in use again, "
+                "marking it active"
+            )
+            upstream_ip_address.status = "active"
+
         tag_ids = self._convert_tag_names_to_ids(address.tags, self.tags)
         upstream_tag_ids = self._get_tag_ids_from_tags(upstream_ip_address.tags)
         tag_ids += [tag_id for tag_id in upstream_tag_ids if tag_id not in tag_ids]
@@ -891,16 +990,48 @@ class Syncer:
             ):
                 continue
             _logger.debug(f"Decommissioning device {upstream_device.name}")
+            # The addresses have to be unassigned before the primary IP fields
+            # are cleared, since Netbox refuses to unassign an address that is
+            # still designated as a primary IP
+            self._unassign_ip_addresses_from_device(upstream_device)
             upstream_device.status = "inventory"
             upstream_device.location = None
             upstream_device.tenant = None
             upstream_device.virtual_chassis = None
             upstream_device.vc_position = None
+            upstream_device.primary_ip4 = None
+            upstream_device.primary_ip6 = None
             try:
                 upstream_device.save()
             except RequestError as e:
                 _logger.error(
                     f"Failed to decommission device {upstream_device.name}: {e}"
+                )
+
+    def _unassign_ip_addresses_from_device(self, upstream_device: Record):
+        """
+        Detaches every IP address from the interfaces of the given device.
+
+        The interfaces themselves are kept: they still describe the ports the
+        device has. The addresses are kept too, only unassigned, so that a
+        later sync can hand them to whichever device NAV reports them on.
+        """
+        for upstream_ip_address in self.netbox_api.ipam.ip_addresses.filter(
+            device_id=upstream_device.id
+        ):
+            _logger.debug(
+                f"Unassigning IP address {upstream_ip_address.address} from "
+                f"device {upstream_device.name}"
+            )
+            self._release_primary_ip_address(upstream_ip_address)
+            upstream_ip_address.assigned_object_type = None
+            upstream_ip_address.assigned_object_id = None
+            try:
+                upstream_ip_address.save()
+            except RequestError as e:
+                _logger.error(
+                    f"Failed to unassign IP address {upstream_ip_address.address} "
+                    f"from device {upstream_device.name}: {e}"
                 )
 
     def _create_device(
