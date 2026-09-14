@@ -3,6 +3,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import IntEnum
+from ipaddress import ip_address, ip_network
 from typing import Callable, Iterable, Literal, NewType, Optional, Self, Sequence
 from urllib.parse import urljoin
 
@@ -10,7 +11,7 @@ import jwt
 from requests.exceptions import RequestException
 
 from navsync.geocoder import geocode_address
-from navsync.nav import Api, NavBox, NavBoxEntity
+from navsync.nav import Api, NavBox, NavBoxEntity, NavGwPortPrefix
 from navsync.utils import NavServerInfo, sanitize_slug
 
 _logger = logging.getLogger(__name__)
@@ -29,6 +30,8 @@ NAV_TOKEN_ENDPOINTS = [
     "/api/1/location",
     "/api/1/room",
     "/api/1/organization",
+    "/api/1/gwportprefix",
+    "/api/1/interface",
 ]
 
 
@@ -93,6 +96,55 @@ class Asset:
 
 
 @dataclass
+class Prefix:
+    """Information about a Netbox prefix instance"""
+
+    prefix: str
+    """The prefix in CIDR notation, e.g. '158.38.1.0/24'"""
+    tags: list[str]
+
+
+@dataclass
+class IpAddress:
+    """Information about a Netbox IP address instance"""
+
+    address: str
+    """The IP address with its mask length, e.g. '10.0.0.1/32'"""
+    tags: list[str]
+    is_primary: bool = False
+    """
+    Whether this address should become the device's primary IP for its address
+    family. Only the address matching the navbox's management IP is primary.
+    """
+    prefix: Optional[Prefix] = None
+    """
+    The prefix this address belongs to according to NAV, if NAV reported a
+    usable one. Registered in Netbox so the address gets a parent prefix.
+    """
+
+
+@dataclass
+class Interface:
+    """
+    Information about a Netbox interface instance, together with the IP
+    addresses that should be assigned to it.
+
+    An interface is needed because Netbox only allows assigning a primary IP
+    address to a device via an IP address that is assigned to one of the
+    device's interfaces.
+    """
+
+    name: str
+    addresses: list[IpAddress]
+    tags: list[str]
+    description: str | None = None
+    enabled: bool = True
+    type: str = "virtual"
+    """Netbox interface type. Defaults to 'virtual' since NAV does not report
+    enough information to reliably determine the physical interface type."""
+
+
+@dataclass
 class Device:
     """Information about a Netbox device instance"""
 
@@ -119,6 +171,7 @@ class Device:
     vc_position: int | None = None
     navbox: NavBox | None = None
     url: Optional[str] = None
+    interfaces: list[Interface] = field(default_factory=list)
 
 
 @dataclass
@@ -482,6 +535,20 @@ class EntityParser:
                 continue
             devices.append(device)
 
+        # A navbox's interfaces and IP addresses belong to the virtual chassis as
+        # a whole, not to any single member. Netbox does not allow the same IP
+        # address to be assigned to several interfaces, so keep them on the
+        # master member only (the one in the lowest position).
+        members_with_interfaces = [d for d in devices if d.interfaces]
+        if len(members_with_interfaces) > 1:
+            master = min(
+                members_with_interfaces,
+                key=lambda d: (d.vc_position is None, d.vc_position),
+            )
+            for device in members_with_interfaces:
+                if device is not master:
+                    device.interfaces = []
+
         return VirtualChassis(
             name=navbox.sysname,
             tags=["navsync"],
@@ -515,6 +582,7 @@ class EntityParser:
         url = urljoin(self._navinfo.url, f"ipdevinfo/{navbox.sysname}/")
         return Device(
             name=sysname,
+            interfaces=self._parse_interfaces(navbox),
             tags=["navsync"],
             tenant=tenant_id,
             manufacturer=manufacturer,
@@ -537,6 +605,141 @@ class EntityParser:
         """
         hostname, separator, domain = sysname.partition(".")
         return f"{hostname}-{position}{separator}{domain}"
+
+    def _parse_interfaces(self, navbox: NavBox) -> list[Interface]:
+        """
+        Parse every interface that NAV reports an IP address for into an
+        Interface, so that the interfaces and their addresses can be registered
+        in Netbox.
+
+        The address matching the navbox's management IP (`navbox.ip`) is marked
+        as primary, so that it becomes the device's primary IP address for its
+        address family. All other addresses are registered without being
+        nominated as primary.
+        """
+        if not navbox.ip:
+            _logger.warning(
+                f"Navbox {navbox.sysname} has no management IP address. Syncing "
+                "its interfaces without a primary IP address."
+            )
+
+        interfaces = []
+        for nav_interface in navbox.interfaces:
+            addresses = [
+                IpAddress(
+                    address=self._ip_with_mask(address),
+                    tags=["navsync"],
+                    is_primary=bool(navbox.ip) and address.ip == navbox.ip,
+                    prefix=self._parse_prefix(address),
+                )
+                for address in nav_interface.addresses
+                if self._is_globally_routable(address.ip)
+            ]
+            if not addresses:
+                continue
+            interfaces.append(
+                Interface(
+                    name=nav_interface.name,
+                    addresses=addresses,
+                    description=nav_interface.description or None,
+                    tags=["navsync"],
+                )
+            )
+
+        if navbox.ip and not any(
+            address.is_primary
+            for interface in interfaces
+            for address in interface.addresses
+        ):
+            if self._is_globally_routable(navbox.ip):
+                _logger.warning(
+                    f"Found no interface in NAV with the management IP address "
+                    f"{navbox.ip} of navbox {navbox.sysname}. Syncing without a "
+                    "primary IP address."
+                )
+            else:
+                _logger.debug(
+                    "Management IP address %s of navbox %s is not globally "
+                    "routable. Syncing without a primary IP address.",
+                    navbox.ip,
+                    navbox.sysname,
+                )
+        return interfaces
+
+    @staticmethod
+    def _parse_prefix(address: NavGwPortPrefix) -> Optional["Prefix"]:
+        """
+        Returns the prefix the given IP address belongs to, so that it can be
+        registered in Netbox as the address's parent prefix.
+
+        Returns None if NAV reported no prefix, if the prefix is not globally
+        routable, or if it is not a usable network. No host prefix is invented
+        for an address whose prefix NAV does not know: a /32 or /128 prefix in
+        Netbox adds no information beyond the IP address record itself.
+        """
+        if not address.prefix:
+            return None
+        try:
+            # 'strict=False' also canonicalizes the prefix, e.g. from
+            # '158.38.1.13/24' to '158.38.1.0/24', which is what Netbox stores
+            network = ip_network(address.prefix, strict=False)
+        except ValueError:
+            _logger.warning(
+                "NAV reported the unparseable prefix %r for IP address %s, not "
+                "registering it as a prefix",
+                address.prefix,
+                address.ip,
+            )
+            return None
+        if not network.is_global:
+            _logger.debug(
+                "Prefix %s of IP address %s is not globally routable, not "
+                "registering it",
+                network,
+                address.ip,
+            )
+            return None
+        if network.prefixlen == network.max_prefixlen:
+            _logger.debug(
+                "Not registering host prefix %s for IP address %s",
+                network,
+                address.ip,
+            )
+            return None
+        return Prefix(prefix=str(network), tags=["navsync"])
+
+    @staticmethod
+    def _is_globally_routable(ip: str) -> bool:
+        """
+        Returns whether the given IP address is globally routable, i.e. not a
+        private, loopback or link-local address.
+
+        Only globally routable addresses are registered in Netbox. Private
+        addresses are typically reused across several organizations, so they say
+        little about the device holding them and would collide with each other
+        in Netbox's global table.
+        """
+        try:
+            return ip_address(ip).is_global
+        except ValueError:
+            _logger.warning(
+                "NAV reported the unparseable IP address %r, not syncing it", ip
+            )
+            return False
+
+    @staticmethod
+    def _ip_with_mask(address: NavGwPortPrefix) -> str:
+        """
+        Returns the IP address with a mask length, as required by Netbox, e.g.
+        '10.0.0.1/32'.
+
+        Addresses are always registered as single-host addresses, regardless of
+        the prefix NAV reports them in. The prefix an address belongs to is
+        expressed by the prefixes registered in Netbox, not by the mask on the
+        address itself.
+        """
+        host_mask = "/128" if ":" in address.ip else "/32"
+        return f"{address.ip}{host_mask}"
 
     def _get_device_role_from_navbox(self, navbox: NavBox) -> str:
         category = navbox.category

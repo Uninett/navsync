@@ -10,6 +10,7 @@ without a syncer instance.
 """
 
 import logging
+from ipaddress import ip_interface
 from typing import Iterable, Optional, Sequence
 
 import pynetbox.core.api as netbox
@@ -127,6 +128,60 @@ def get_assets(api: netbox.Api) -> dict[int, dict[SerialStr, Record]]:
             continue
         assets.setdefault(asset.device_type.id, {})[asset.serial] = asset
     return assets
+
+
+def get_interfaces(api: netbox.Api) -> dict[int, dict[NameStr, Record]]:
+    """
+    Returns dict mapping device id to interface names and interfaces.
+
+    Interface names are only unique within a device, so the device id is part of
+    the key. Interfaces that are not attached to a device are left out.
+    """
+    interfaces: dict[int, dict[NameStr, Record]] = {}
+    for interface in api.dcim.interfaces.all():
+        if not interface.device:
+            continue
+        interfaces.setdefault(interface.device.id, {})[interface.name] = interface
+    return interfaces
+
+
+def get_ip_addresses(api: netbox.Api) -> dict[str, Record]:
+    """
+    Returns dict mapping host address (without mask, e.g. '10.0.0.1') to IP
+    address.
+
+    Netbox enforces uniqueness on the host address, not on the address together
+    with its mask, so '10.0.0.1/24' and '10.0.0.1/32' are the same address to
+    Netbox. Keying on the host address means an address whose mask has changed
+    in NAV is recognized, instead of being created again and rejected as a
+    duplicate.
+
+    Addresses that cannot be parsed are left out.
+    """
+    ip_addresses: dict[str, Record] = {}
+    for ip_address in api.ipam.ip_addresses.all():
+        host = host_address(str(ip_address.address))
+        if host is None:
+            continue
+        ip_addresses[host] = ip_address
+    return ip_addresses
+
+
+def host_address(address: str) -> Optional[str]:
+    """
+    Returns the host part of an address in CIDR notation, e.g. '10.0.0.1' for
+    '10.0.0.1/24'. Returns None if the address cannot be parsed.
+    """
+    try:
+        return str(ip_interface(address).ip)
+    except ValueError:
+        _logger.warning("Could not parse IP address %r", address)
+        return None
+
+
+def get_prefixes(api: netbox.Api) -> dict[str, Record]:
+    """Returns dict mapping prefix (e.g. '158.38.1.0/24') to prefix"""
+    return {str(prefix.prefix): prefix for prefix in api.ipam.prefixes.all()}
 
 
 def get_nav_servers(api: netbox.Api, https: bool) -> Iterable[NavServerInfo]:

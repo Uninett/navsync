@@ -13,8 +13,8 @@ EXAMPLE_CONFIG = """\
 url="http://127.0.0.1:8080"
 
 # The 'token' option specifies an API token with read/write access to the Netbox
-# instance's 'DCIM', 'Plugins (Inventory)', 'Virtualization' and 'Tenancy' API
-# endpoints
+# instance's 'DCIM', 'IPAM', 'Plugins (Inventory)', 'Virtualization' and
+# 'Tenancy' API endpoints
 token="0123456789"
 
 [nav]

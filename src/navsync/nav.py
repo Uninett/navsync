@@ -50,6 +50,43 @@ class NavBoxEntity:
 
 
 @dataclass
+class NavGwPortPrefix:
+    """
+    Represents a 'gwportprefix' model instance from Nav, i.e. an IP address
+    assigned to an interface.
+    """
+
+    # The IP address assigned to the interface, without a mask
+    ip: str
+    # The prefix the IP address belongs to, e.g. '10.0.0.0/24'. Used to derive
+    # the mask length for the IP address in Netbox.
+    prefix: Optional[str]
+    virtual: bool
+
+
+@dataclass
+class NavInterface:
+    """
+    Represents an 'interface' model instance from Nav, together with the IP
+    addresses assigned to it via 'gwportprefix' model instances.
+
+    Only interfaces that have at least one gwportprefix entry are represented,
+    since an interface without an IP address is of no interest to Netbox.
+    """
+
+    _id: int
+    _navbox_id: int
+
+    name: str
+    ifindex: Optional[int]
+    description: str
+
+    # Every IP address assigned to this interface, as reported by gwportprefix.
+    # An interface commonly has both an IPv4 and an IPv6 address.
+    addresses: list[NavGwPortPrefix]
+
+
+@dataclass
 class NavBox:
     """Represents a 'netbox' model instance from Nav"""
 
@@ -57,6 +94,7 @@ class NavBox:
     _room_location_id: str
 
     sysname: str
+    ip: str
     category: Literal["GW", "GSW", "SW", "EDGE", "WLAN", "SRV", "OTHER", "ENV", "POWER"]
     entities: list[NavBoxEntity]
     #    mfg_date: Optional[datetime]
@@ -71,6 +109,11 @@ class NavBox:
     room_description: str
     room_data: dict[str, Optional[str]]
     room_location: Optional[NavLocation]
+
+    # Every interface on this navbox that has at least one IP address assigned
+    # to it, as reported by Nav's gwportprefix data. The interface holding the
+    # navbox's management IP (NavBox.ip) is among these, if it could be resolved.
+    interfaces: list[NavInterface]
 
     organization_identifier: str
     organization_description: str
@@ -107,6 +150,9 @@ class Api:
         while url:
             try:
                 response = self.session.get(url, params=params)
+                # Nav's 'next' link already contains the query parameters, so
+                # they must not be sent again for the subsequent pages
+                params = None
                 response.raise_for_status()
                 response = response.json()
             except (requests.RequestException, requests.JSONDecodeError) as err:
@@ -115,6 +161,36 @@ class Api:
                 raise AuthenticationError(url)
             yield from response["results"]
             url = response.get("next", None)
+
+    def get_single(self, path: str, params=None) -> Optional[dict]:
+        """
+        Sends a GET request to a detail route in Nav's API and returns the
+        single object it refers to, or None if it does not exist.
+
+        Unlike :meth get:, this expects an un-paginated response containing a
+        single object rather than a list of results.
+
+        Nav applies its regular filters to detail routes too, so 'params' can
+        be used to constrain which object is considered a match. An object that
+        does not match is reported as not existing.
+        """
+        url = self.base_url + path.lstrip("/")
+        try:
+            response = self.session.get(url, params=params)
+            if response.status_code == 404:
+                return None
+            response.raise_for_status()
+            json = response.json()
+        except (requests.RequestException, requests.JSONDecodeError) as err:
+            raise ConnectionError(*err.args)
+        if not isinstance(json, dict):
+            raise ConnectionError(f"Unexpected response from {url}: {json!r}")
+        # A detail route returns the object itself, so a 'results' key means we
+        # were served a list endpoint, which in turn means the token was not
+        # accepted and we were redirected to the API root
+        if "results" in json:
+            raise AuthenticationError(url)
+        return json
 
     def get_navboxes(self) -> list[NavBox]:
         """
@@ -151,9 +227,30 @@ class Api:
         # fill in relations between boxes in 'box_by_id' and locations in 'location_by_id'
         for box in box_by_id.values():
             box.room_location = location_by_id[box._room_location_id]
+
         end = time.time()
         _logger.debug(
             "Filling relations for all models from %s took %.6f seconds",
+            self.base_url,
+            end - start,
+        )
+
+        # Fill in each box's interfaces that have IP addresses assigned to them.
+        # This is looked up per box, since fetching all gateway port prefixes
+        # and interfaces would mean paging through far more data than is needed.
+        start = time.time()
+        for box in box_by_id.values():
+            box.interfaces = self._get_interfaces_with_addresses(box._id)
+            if not box.interfaces:
+                _logger.debug(
+                    "Found no interfaces with IP addresses in %s for navbox %s",
+                    self.base_url,
+                    box.sysname,
+                )
+        end = time.time()
+        _logger.debug(
+            "Getting interfaces with IP addresses for all netboxes from %s "
+            "took %.6f seconds",
             self.base_url,
             end - start,
         )
@@ -176,8 +273,10 @@ class Api:
                 _id=json["id"],
                 _room_location_id=json["room"]["location"],
                 room_location=None,
+                interfaces=[],
                 entities=[],
                 sysname=json["sysname"],
+                ip=json.get("ip") or "",
                 category=json["category"]["id"],
                 type_name=None if json["type"] is None else json["type"]["name"],
                 type_description=None
@@ -232,6 +331,82 @@ class Api:
             )
             entity_by_id[json["id"]] = entity
         return entity_by_id
+
+    def _get_interfaces_with_addresses(self, navbox_id: int) -> list[NavInterface]:
+        """
+        Return every interface on the given netbox that has at least one IP
+        address assigned to it, according to Nav's gwportprefix data.
+
+        Interfaces without a gwportprefix entry are deliberately not included:
+        an interface with no IP address has nothing to contribute to Netbox, and
+        a switch can have hundreds of them.
+
+        :param navbox_id: the id of the netbox to get interfaces for
+        """
+        # One request yields every IP address on the netbox, grouped by the
+        # interface it belongs to. Filtering on the netbox also means Nav will
+        # never hand us an interface belonging to some other netbox.
+        addresses_by_interface_id: dict[int, list[NavGwPortPrefix]] = {}
+        ifindex_by_interface_id: dict[int, Optional[int]] = {}
+        for json in self.get("gwportprefix/", params={"interface__netbox": navbox_id}):
+            interface_json = json.get("interface") or {}
+            interface_id = interface_json.get("id")
+            gw_ip = json.get("gw_ip")
+            if interface_id is None or gw_ip is None:
+                _logger.debug(
+                    "Skipping gwportprefix from %s with incomplete data: %r",
+                    self.base_url,
+                    json,
+                )
+                continue
+
+            # gw_ip may be reported with a mask, e.g. '10.0.0.1/24', but the
+            # management IP in NavBox.ip never is, so normalize it here to make
+            # the two comparable
+            ip = gw_ip.split("/")[0]
+            addresses_by_interface_id.setdefault(interface_id, []).append(
+                NavGwPortPrefix(
+                    ip=ip,
+                    prefix=(json.get("prefix") or {}).get("net_address"),
+                    virtual=bool(json.get("virtual", False)),
+                )
+            )
+            ifindex_by_interface_id[interface_id] = interface_json.get("ifindex")
+
+        interfaces = []
+        for interface_id, addresses in addresses_by_interface_id.items():
+            # The gwportprefix only inlines the interface's id, ifindex and
+            # netbox, so the name has to be looked up from the interface itself
+            interface_json = (
+                self.get_single(
+                    f"interface/{interface_id}/", params={"netbox": navbox_id}
+                )
+                or {}
+            )
+            name = interface_json.get("ifname")
+            if not name:
+                _logger.warning(
+                    "Interface %s in %s has no ifname, cannot sync the IP "
+                    "address(es) %s assigned to it",
+                    interface_id,
+                    self.base_url,
+                    ", ".join(address.ip for address in addresses),
+                )
+                continue
+
+            interfaces.append(
+                NavInterface(
+                    _id=interface_id,
+                    _navbox_id=navbox_id,
+                    name=name,
+                    ifindex=ifindex_by_interface_id.get(interface_id),
+                    description=interface_json.get("ifalias")
+                    or interface_json.get("ifdescr")
+                    or "",
+                    addresses=addresses,
+                )
+            )
+        return interfaces
 
     def _get_unfilled_locations_by_id(self) -> dict[str, NavLocation]:
         """
