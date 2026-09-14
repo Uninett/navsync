@@ -376,6 +376,13 @@ class EntityParser:
             )
             raise NextAttempt
 
+        if len(physical_chassises) == 1:
+            _logger.warning(
+                f"Navbox {navbox.sysname} looks like a virtual chassis, but with only 1 "
+                f"physical chassis. Cannot parse as juniper virtual chassis."
+            )
+            raise NextAttempt
+
         return self._parse_virtual_chassis(
             navbox, virtual_chassis, physical_chassises, tenant_id
         )
