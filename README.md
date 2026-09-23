@@ -4,8 +4,9 @@ Syncs inventory data from [NAV](https://nav.uninett.no/) into
 [Netbox](https://netbox.dev/).
 
 `navsync` discovers the NAV instances to read from by looking them up in Netbox
-itself: any Device or VM with role `Verktøykasse` and status `Active` is treated
-as a NAV server. For each one it reads the NAV inventory over NAV's API and
+itself: any Device or VM with the role slug `verktykassecnaas`, status `Active`
+and tag `navsync` is treated as a NAV server (see
+[Netbox prerequisites](#netbox-prerequisites)). For each one it reads the NAV inventory over NAV's API and
 creates or updates the corresponding sites, locations, racks, devices,
 interfaces, IP addresses and prefixes in Netbox.
 
@@ -43,7 +44,7 @@ A minimal configuration:
 url = "http://127.0.0.1:8080"
 
 # An API token with read/write access to the Netbox instance's 'DCIM', 'IPAM',
-# 'Plugins (Inventory)', 'Virtualization' and 'Tenancy' API endpoints.
+# 'Plugins (Inventory)', 'Virtualization', 'Tenancy' and 'Extras' API endpoints.
 token = "0123456789"
 
 [nav]
@@ -62,6 +63,81 @@ issuer = "navsync"
 # If true, calls to the NAV APIs use https://, otherwise http://.
 https = true
 ```
+
+## Netbox prerequisites
+
+The following must exist in Netbox before running `navsync`.
+
+**Plugin**
+
+- [netbox-inventory](https://github.com/ArnesSI/netbox-inventory), which is
+  used for assets.
+
+**Tags**
+
+- `navsync`: set this on the NAV server devices and VMs you want to sync.
+- `cnaas`: navsync puts it on everything it creates, and only cleans up
+  objects that have both `navsync` and `cnaas`. If this tag does not exist, it
+  is silently left off.
+
+**Device roles**
+
+These are matched by name. If a role is missing, the sync is aborted.
+
+- `router`, `switch`, `PDU`, `server`, `Uninett Environmental`, `unknown`
+- A role with slug `verktykassecnaas`, which marks NAV servers. It must be
+  usable on both devices and VMs.
+
+**Custom fields**
+
+| Name               | Object types                 | Type                  |
+| ------------------ | ---------------------------- | --------------------- |
+| `nav_url`          | Site, Location, Device       | Text/URL              |
+| `software_version` | Asset (inventory)            | Text                  |
+| `owner`            | Virtual machine              | Object (Tenant)       |
+
+**NAV servers**
+
+Each NAV server needs:
+
+- role `verktykassecnaas`, status `Active` and tag `navsync`
+- a name that is the hostname NAV is reachable on
+- a tenant
+- an owner. On a VM this is the `owner` custom field. On a device it is the
+  owner of its assigned inventory asset.
+
+**Tenants (optional)**
+
+NAV organizations under `cnaas` are mapped to the Netbox tenant with the same
+name as the organization ID. If no tenant matches, the NAV server's tenant is
+used.
+
+Manufacturers, device types, sites, locations, interfaces, IP addresses,
+prefixes and virtual chassis are all created automatically.
+
+## NAV prerequisites
+
+**Organizations**
+
+- Only netboxes owned by the organization `cnaas` or one of its descendants
+  are synced. All others are skipped.
+- A netbox owned by `cnaas` itself gets the NAV server's Netbox tenant. A
+  netbox owned by a descendant organization gets the Netbox tenant with the
+  same name as that organization's ID, falling back to the NAV server's
+  tenant.
+
+**Locations and rooms**
+
+- Every room must belong to a location. A room without one aborts the sync.
+- The Netbox site is taken from the room's location tree, walking up from the
+  room. It is the nearest location with an address (the `addr` field in the
+  location's data), or the top-level location if none has an address.
+- The locations between the room and the site become nested Netbox locations,
+  and the room becomes the innermost Netbox location.
+- Site names must be unique across all NAV servers. A duplicate aborts the
+  sync.
+- The address is geocoded with Kartverket, so it must be a Norwegian address
+  to get coordinates.
 
 ## Usage
 
@@ -90,10 +166,6 @@ pytest tests/test_location_hierarchy_parser.py::TestSimpleHierarchy::test_root_n
 ```
 
 ## Development
-
-See [docs/development.md](docs/development.md) for how to set up local NAV and
-Netbox instances to test against, and for notes on how NAV's data model is
-mapped onto Netbox's.
 
 This repository uses [pre-commit](https://pre-commit.com/) for linting and
 formatting:
