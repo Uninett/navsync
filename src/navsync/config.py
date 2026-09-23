@@ -5,12 +5,11 @@ from platformdirs import user_config_dir
 
 settings = Dynaconf(
     settings_files=[
-        "netbox-tools.toml",
-        os.path.join(user_config_dir("netbox-tools"), "netbox-tools.toml"),
+        "navsync.toml",
+        os.path.join(user_config_dir("navsync"), "navsync.toml"),
     ],
-    envvar_prefix="NETBOX_TOOLS",
+    envvar_prefix="NAVSYNC",
     validators=[
-        Validator("kind.database_url", must_exist=True, startswith="postgresql://"),
         Validator(
             "netbox.url",
             must_exist=True,

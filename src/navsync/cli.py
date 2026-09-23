@@ -35,7 +35,7 @@ expiry_delta=3600
 
 # `issuer` is used to set the `iss` claim for generated tokens. This must match
 # the value configured in the NAV instances you are syncing against
-issuer="netbox-tools"\
+issuer="navsync"\
 
 # If `https` is true, calls to the NAV APIs will use https://
 # If false, it will use http://
@@ -57,7 +57,7 @@ def parse_args():
         "Syncs navboxes (a.k.a. netboxes in NAV) from NAV to Netbox. "
         "Configuration is needed prior to running this script. "
         "Configuration should be placed at "
-        "'$CONFDIR/netbox-tools/netbox-tools.toml', where $CONFDIR is your "
+        "'$CONFDIR/navsync/navsync.toml', where $CONFDIR is your "
         "system's default configuration directory, e.g. '~/.config'.\n\n"
         "Example minimal configuration\n"
         "-----------------------------\n"

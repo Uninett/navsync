@@ -126,7 +126,7 @@ class Syncer:
         """
         Initialize a syncer based on user-supplied settings
 
-        :param settings: the netbox-tools config-file, already parsed and validated
+        :param settings: the navsync config-file, already parsed and validated
         :param nosync: only get data from the NAV instances, without making any
             changes in Netbox
         """

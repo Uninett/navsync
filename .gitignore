@@ -1,0 +1,22 @@
+# Directories generated/used by development tools
+.idea/
+.ve/
+.venv/
+venv/
+.tox/
+.pytest_cache/
+.ruff_cache/
+reports/
+build/
+dist/
+
+# Generated files
+src/navsync/version.py
+.coverage
+*.pyc
+__pycache__/
+*.egg-info/
+*.whl
+
+# Local configuration files
+navsync.toml

@@ -28,10 +28,10 @@ For å teste interaktivt (gjennom et REPL eller kommandolinjen) må man kunne sn
   ```
 
   Opprett/oppdater navsync config-filen
-  `~/.config/netbox-tools/netbox-tools.toml` (eventuelt bytt ut `~/.config/` med stien hvor
+  `~/.config/navsync/navsync.toml` (eventuelt bytt ut `~/.config/` med stien hvor
   konfigurasjon normalt blir lest fra på din maskin)
   ```toml
-  # ~/.config/netbox-tools/netbox-tools.toml
+  # ~/.config/navsync/navsync.toml
   [netbox]
   url="http://127.0.0.1:8081"
   token="0123456789abcdef0123456789abcdef01234567"  # Denne nøkkelen blir godkjent av Netbox-instansen
@@ -39,7 +39,7 @@ For å teste interaktivt (gjennom et REPL eller kommandolinjen) må man kunne sn
   [nav]
   private_key_path="/path/to/private_key.pem"
   expiry_delta=3600
-  issuer="netbox-tools"
+  issuer="navsync"
   https=false
   ```
 
@@ -47,7 +47,7 @@ For å teste interaktivt (gjennom et REPL eller kommandolinjen) må man kunne sn
   i neste steg
   ```conf
   # /tmp/jwt.conf
-  [netbox-tools]
+  [navsync]
   aud=http://127.0.0.1:8080
   keytype=PEM
   key=/etc/nav/webfront/public_key.pem  # /tmp/public_key.pem blir plassert på denne stien i neste steg

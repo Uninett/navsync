@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=80.3.1", "wheel", "setuptools_scm[toml]>=8.3.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "navsync"
+description = "Syncs inventory data from NAV into Netbox"
+authors = [{name="Sikt - Norwegian Agency for Shared Services in Education and Research", email="kontakt@sikt.no"}]
+readme = "README.md"
+requires-python = ">=3.11"
+license = "Apache-2.0"
+classifiers = [
+    "Intended Audience :: Information Technology",
+    "Intended Audience :: System Administrators",
+    "Development Status :: 3 - Alpha",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "dynaconf",
+    "platformdirs",
+    "pyjwt[crypto]",
+    "pynetbox",
+    "requests",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+test = ["pytest"]
+
+[project.scripts]
+navsync = "navsync.cli:main"
+
+[tool.setuptools]
+include-package-data = true
+zip-safe = false
+platforms = ["any"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+exclude = ["tests*"]
+
+[tool.setuptools.exclude-package-data]
+"*" = ["tests/"]
+
+[tool.setuptools_scm]
+write_to = "src/navsync/version.py"
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+fixable = ["I"]
