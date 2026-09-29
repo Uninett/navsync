@@ -34,7 +34,8 @@ Configuration is read from `navsync.toml`, which is looked for in the current
 working directory, in any of its parent directories, and in the system's
 standard user configuration directory — e.g.
 `~/.config/navsync/navsync.toml`. Settings can also be supplied through the
-environment using the `NAVSYNC_` prefix.
+environment using the `NAVSYNC_` prefix, e.g. `NAVSYNC_NETBOX__TOKEN` can be used to
+configure the netbox token.
 
 A minimal configuration:
 
