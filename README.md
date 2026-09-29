@@ -128,7 +128,6 @@ prefixes and virtual chassis are all created automatically.
 
 **Locations and rooms**
 
-- Every room must belong to a location. A room without one aborts the sync.
 - The Netbox site is taken from the room's location tree, walking up from the
   room. It is the nearest location with an address (the `addr` field in the
   location's data), or the top-level location if none has an address.
