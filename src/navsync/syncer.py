@@ -313,7 +313,7 @@ class Syncer:
         new_asset_dict = {
             "serial": asset.serial,
             "status": asset.status,
-            "owner": asset.owner,
+            "owning_tenant": asset.owning_tenant,
             "tags": tag_ids,
             "tenant": asset.tenant,
             "device": upstream_device.id,
@@ -333,7 +333,7 @@ class Syncer:
         self, asset: Asset, upstream_asset: Record, upstream_device: Record
     ):
         upstream_asset.device = upstream_device.id
-        upstream_asset.owner = asset.owner
+        upstream_asset.owning_tenant = asset.owning_tenant
         upstream_asset.tenant = asset.tenant
         upstream_asset.status = asset.status
         if asset.contact is not None:

@@ -105,7 +105,7 @@ Each NAV server needs:
 - a name that is the hostname NAV is reachable on
 - a tenant
 - an owner. On a VM this is the `owner` custom field. On a device it is the
-  owner of its assigned inventory asset.
+  owning tenant of its assigned inventory asset.
 
 **Tenants (optional)**
 

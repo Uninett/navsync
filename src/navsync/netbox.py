@@ -238,15 +238,15 @@ def get_nav_servers(api: netbox.Api, https: bool) -> Iterable[NavServerInfo]:
                 f"Device {device.name} has no tenant assigned. Cannot determine NAV server tenant. Skipping."
             )
             continue
-        if not hasattr(asset, "owner") or asset.owner is None:
+        if not hasattr(asset, "owning_tenant") or asset.owning_tenant is None:
             _logger.error(
-                f"Device {device.name}'s asset has no owner assigned. Cannot determine NAV server owner. Skipping."
+                f"Device {device.name}'s asset has no owning tenant assigned. Cannot determine NAV server owner. Skipping."
             )
             continue
         yield NavServerInfo(
             id=device.id,
             url=_url_from_name(device.name, https),
-            owner_id=asset.owner.id,
+            owner_id=asset.owning_tenant.id,
             tenant_id=device.tenant.id,
         )
 

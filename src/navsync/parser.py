@@ -84,7 +84,7 @@ class Asset:
 
     tags: list[str]
     tenant: int
-    owner: int
+    owning_tenant: int
     manufacturer: ManufacturerStr
     model: ModelStr
     serial: SerialStr
@@ -775,7 +775,7 @@ class EntityParser:
             tags=["navsync"],
             manufacturer=manufacturer,
             model=model,
-            owner=self._navinfo.owner_id,
+            owning_tenant=self._navinfo.owner_id,
             tenant=tenant_id,
             nav_server=self._navinfo.url,
             software_version=entity.software_revision,
