@@ -1172,6 +1172,7 @@ class Syncer:
         )
         flat_locations: dict[str, dict[NameStr, Record]] = {}
         synced_location_ids: set[int] = set()
+        synced_site_ids: set[int] = set()
 
         for site in sites:
             upstream_site = netbox_helpers.find_site(
@@ -1187,6 +1188,7 @@ class Syncer:
                     )
                     continue
                 upstream_sites.append(upstream_site)
+            synced_site_ids.add(upstream_site.id)
 
             self._sync_location_tree(
                 site.locations.values(),
@@ -1200,8 +1202,28 @@ class Syncer:
         self._decommission_all_missing_locations(
             upstream_locations_by_slug, synced_location_ids
         )
+        self._decommission_all_missing_sites(upstream_sites, synced_site_ids)
 
         return flat_locations
+
+    def _decommission_all_missing_sites(
+        self, upstream_sites: Sequence[Record], synced_site_ids: set[int]
+    ):
+        """Retire any upstream sites that were registered by navsync but were not found in the current sync"""
+        for upstream_site in upstream_sites:
+            if upstream_site.id in synced_site_ids:
+                continue
+            tags = [tag.name for tag in upstream_site.tags]
+            if "navsync" not in tags or "cnaas" not in tags:
+                continue
+            if upstream_site.status.value == "retired":
+                continue
+            _logger.debug(f"Decommissioning site {upstream_site.name}")
+            upstream_site.status = "retired"
+            try:
+                upstream_site.save()
+            except RequestError as e:
+                _logger.error(f"Failed to decommission site {upstream_site.name}: {e}")
 
     def _decommission_all_missing_locations(
         self,
