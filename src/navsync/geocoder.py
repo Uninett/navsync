@@ -93,7 +93,8 @@ def geocode_address(address: str) -> tuple[float, float] | None:
         "treffPerSide": "2",
         "asciiKompatibel": "true",
     }
-    response = requests.get(_KARTVERKET_URL, params=params, timeout=10)
+    headers = {"User-Agent": settings.geocode.user_agent}
+    response = requests.get(_KARTVERKET_URL, params=params, headers=headers, timeout=10)
     response.raise_for_status()
     data = response.json()
 

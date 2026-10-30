@@ -25,6 +25,7 @@ settings = Dynaconf(
             default=os.path.join(user_cache_dir("navsync"), "geocode.json"),
         ),
         Validator("geocode.cache_ttl", default=30 * 24 * 3600),
+        Validator("geocode.user_agent", default="navsync"),
     ],
     validate_only=["netbox", "geocode"],
 )
