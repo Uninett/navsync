@@ -19,6 +19,7 @@ def cache_dir(tmp_path, monkeypatch):
             "cache_enabled": True,
             "cache_path": str(tmp_path / "geocode.json"),
             "cache_ttl": 60,
+            "user_agent": "navsync-test",
         },
     )
     return tmp_path
@@ -55,6 +56,11 @@ class TestGeocodeAddress:
         with patch_api(2):
             assert geocode_address("Testgata 1") is None
 
+    def test_request_sends_configured_user_agent(self):
+        with patch_api(1) as get:
+            geocode_address("Testgata 1")
+        assert get.call_args.kwargs["headers"] == {"User-Agent": "navsync-test"}
+
 
 class TestGeocodeCache:
     def test_second_lookup_uses_cache(self):
@@ -89,7 +95,10 @@ class TestGeocodeCache:
             assert geocode_address("Testgata 1") == (60.0, 10.0)
 
     def test_nothing_is_cached_when_disabled(self, cache_dir):
-        with patch.dict(geocoder.settings, {"GEOCODE": {"cache_enabled": False}}):
+        with patch.dict(
+            geocoder.settings,
+            {"GEOCODE": {"cache_enabled": False, "user_agent": "navsync-test"}},
+        ):
             with patch_api(1, lat=60.0, lon=10.0) as get:
                 geocode_address("Testgata 1")
                 geocode_address("Testgata 1")
@@ -116,6 +125,7 @@ class TestCacheSettings:
         )
         assert geocoder.settings.geocode.cache_enabled is False
         assert geocoder.settings.geocode.cache_ttl == 30 * 24 * 3600
+        assert geocoder.settings.geocode.user_agent == "navsync"
 
     def test_configured_cache_path_is_used(self, monkeypatch, tmp_path):
         monkeypatch.undo()

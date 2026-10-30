@@ -77,6 +77,12 @@ cache_path = "~/.cache/navsync/geocode.json"
 # Optional. How long (in seconds) a geocoding result is cached, including when
 # an address was not found or was ambiguous. Defaults to 30 days.
 cache_ttl = 2592000
+
+# Optional. User-Agent header sent with requests to Kartverket, so they can
+# identify who is calling their API. Defaults to "navsync". You should probably
+# include a contact email address, e.g. "navsync (you@example.org)", so they can
+# reach you if your usage causes problems.
+user_agent = "navsync"
 ```
 
 ## Netbox prerequisites
