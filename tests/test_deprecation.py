@@ -262,3 +262,51 @@ class TestReactivation:
         )
 
         assert existing.status == "active"
+
+
+def upstream_location(id=1, status="active", tags=("navsync", "cnaas")):
+    record = MagicMock()
+    record.id = id
+    record.status.value = status
+    record.tags = [MagicMock(**{"name": tag}) for tag in tags]
+    for tag, name in zip(record.tags, tags):
+        tag.name = name
+    return record
+
+
+class TestDecommissionMissingLocations:
+    def decommission(self, *locations, synced=()):
+        syncer = make_syncer()
+        by_slug = {
+            "site": {f"loc{location.id}": {None: location} for location in locations}
+        }
+        syncer._decommission_all_missing_locations(by_slug, set(synced))
+
+    def test_a_missing_location_should_be_retired(self):
+        location = upstream_location()
+        self.decommission(location)
+        assert location.status == "retired"
+        location.save.assert_called_once()
+
+    def test_a_synced_location_should_be_left_alone(self):
+        location = upstream_location(id=5)
+        self.decommission(location, synced=[5])
+        location.save.assert_not_called()
+
+    def test_locations_not_owned_by_navsync_should_be_left_alone(self):
+        location = upstream_location(tags=("navsync",))
+        self.decommission(location)
+        location.save.assert_not_called()
+
+    def test_an_already_retired_location_should_not_be_saved_again(self):
+        location = upstream_location(status="retired")
+        self.decommission(location)
+        location.save.assert_not_called()
+
+    def test_a_failed_save_should_not_raise(self):
+        response = MagicMock()
+        response.status_code = 400
+        response.json.return_value = {"status": ["nope"]}
+        location = upstream_location()
+        location.save.side_effect = RequestError(response)
+        self.decommission(location)
