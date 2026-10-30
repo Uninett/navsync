@@ -63,6 +63,20 @@ issuer = "navsync"
 
 # If true, calls to the NAV APIs use https://, otherwise http://.
 https = true
+
+[geocode]
+# Optional. If true, geocoding results are cached on disk so repeated runs don't
+# query Kartverket again for the same address. Defaults to false.
+cache_enabled = false
+
+# Optional. File used to cache geocoding results between runs. Defaults to
+# `geocode.json` in the user cache directory, e.g. ~/.cache/navsync/geocode.json.
+# The user running navsync must be able to write to it.
+cache_path = "~/.cache/navsync/geocode.json"
+
+# Optional. How long (in seconds) a geocoding result is cached, including when
+# an address was not found or was ambiguous. Defaults to 30 days.
+cache_ttl = 2592000
 ```
 
 ## Netbox prerequisites
@@ -138,6 +152,12 @@ prefixes and virtual chassis are all created automatically.
   sync.
 - The address is geocoded with Kartverket, so it must be a Norwegian address
   to get coordinates.
+- Geocoding results can be cached on disk so repeated runs don't query
+  Kartverket again for the same address. Caching is off by default; enable it
+  with `geocode.cache_enabled`. The cache file is by default
+  `~/.cache/navsync/geocode.json` (see `geocode.cache_path`). Results, including
+  addresses that were not found, are cached for 30 days by default (see
+  `geocode.cache_ttl`). Delete the file to force fresh lookups.
 
 ## Usage
 
