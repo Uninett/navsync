@@ -11,7 +11,7 @@ import jwt
 from requests.exceptions import RequestException
 
 from navsync.geocoder import geocode_address
-from navsync.nav import Api, NavBox, NavBoxEntity, NavGwPortPrefix
+from navsync.nav import Api, NavBox, NavBoxEntity, NavError, NavGwPortPrefix
 from navsync.utils import NavServerInfo, sanitize_slug
 
 _logger = logging.getLogger(__name__)
@@ -191,6 +191,11 @@ class NavData:
     locations: list[Location] = field(default_factory=list)
     chassis: dict[NameStr, VirtualChassis] = field(default_factory=dict)
     devices: dict[NameStr, Device] = field(default_factory=dict)
+    unreachable_nav_servers: set[str] = field(default_factory=set)
+    """
+    The NAV servers that are registered to be synced from, but could not be
+    fetched from. Nothing synced from them should be decommissioned.
+    """
 
 
 class IANAPhysicalClass(IntEnum):
@@ -954,11 +959,30 @@ class NavFetcher:
 
         for nav_server in nav_servers:
             token = self.generate_nav_token(aud=nav_server.url)
-            # Sleep to avoid issues with the `nbf` claim.
-            time.sleep(1)
-            server_sites, server_locations = LocationHierarchyParser(
-                nav_server, token
-            ).get_sites_and_locations()
+            # Everything from a NAV server is fetched before any of it is kept,
+            # so that a server failing halfway through contributes nothing
+            try:
+                # Sleep to avoid issues with the `nbf` claim.
+                time.sleep(1)
+                server_sites, server_locations = LocationHierarchyParser(
+                    nav_server, token
+                ).get_sites_and_locations()
+
+                # Sleep to avoid issues with the `nbf` claim.
+                time.sleep(1)
+                server_entities = EntityParser(
+                    nav_server,
+                    token,
+                    locations=server_locations,
+                    netbox_tenants=self.netbox_tenants,
+                ).parse()
+            except NavError as e:
+                _logger.error(
+                    f"Could not fetch from NAV server {nav_server.url}: {e}. "
+                    "Nothing synced from it will be decommissioned."
+                )
+                result.unreachable_nav_servers.add(nav_server.url)
+                continue
 
             for site in server_sites.values():
                 if site.name in sites:
@@ -967,17 +991,7 @@ class NavFetcher:
                     )
                 sites[site.name] = site
             result.locations.extend(server_locations.values())
-
-            # Sleep to avoid issues with the `nbf` claim.
-            time.sleep(1)
-            all_entities.extend(
-                EntityParser(
-                    nav_server,
-                    token,
-                    locations=server_locations,
-                    netbox_tenants=self.netbox_tenants,
-                ).parse()
-            )
+            all_entities.extend(server_entities)
 
         result.chassis, result.devices = self._get_virtual_chassis_and_devices(
             all_entities
