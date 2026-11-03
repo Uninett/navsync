@@ -391,6 +391,25 @@ class TestReleasePrimaryIpAddress:
         assert released == [existing], "released before being reassigned"
         assert existing.assigned_object_id == interface.id
 
+    def test_an_updated_address_should_not_be_fetched_again(self):
+        """pynetbox updates the record from the response to a save itself"""
+        syncer = make_syncer()
+        syncer._get_tag_ids_from_tags = lambda tags: []
+        syncer._release_primary_ip_address = lambda ip: None
+        interface = upstream_interface()
+        existing = MagicMock()
+        existing.address = "158.38.1.13/32"
+        existing.assigned_object_id = 999
+        existing.tags = []
+        existing.updates.return_value = {"assigned_object_id": interface.id}
+
+        syncer._sync_ip_address(
+            nav_address("158.38.1.13/32"), interface, {"158.38.1.13": existing}
+        )
+
+        existing.save.assert_called_once()
+        existing.full_details.assert_not_called()
+
     def test_an_already_assigned_address_should_not_be_released(self):
         syncer = make_syncer()
         syncer._get_tag_ids_from_tags = lambda tags: []

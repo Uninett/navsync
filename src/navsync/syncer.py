@@ -332,7 +332,6 @@ class Syncer:
                 )
                 prior_asset.device = None
                 prior_asset.save()
-                prior_asset.full_details()
 
             if upstream_asset:
                 self._update_asset(asset, upstream_asset, upstream_device)
@@ -903,8 +902,6 @@ class Syncer:
             )
             try:
                 upstream_ip_address.save()
-                # Needs to be done to reset cached values for if fields have been modified
-                upstream_ip_address.full_details()
             except RequestError as e:
                 _logger.error(
                     f"Failed to update IP address {upstream_ip_address.address}: "
