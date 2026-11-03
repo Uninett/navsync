@@ -4,6 +4,7 @@ import pytest
 import requests
 
 from navsync.nav import (
+    PAGE_SIZE,
     Api,
     AuthenticationError,
     ConnectionError,
@@ -13,7 +14,6 @@ from navsync.nav import (
 from navsync.parser import EntityParser
 from navsync.utils import NavServerInfo
 
-GWP_PARAMS = {"interface__netbox": 10}
 IFACE_PARAMS = {"netbox": 10}
 
 
@@ -53,13 +53,50 @@ def make_api(gwportprefixes, interfaces=None, iface_params=IFACE_PARAMS):
     return api
 
 
+def get_interfaces_with_addresses(api, navbox_id=10):
+    """Gets the interfaces of the given netbox the way `get_navboxes` does"""
+    gwportprefixes = api._get_gwportprefixes_by_navbox_id().get(navbox_id, [])
+    return api._get_interfaces_with_addresses(navbox_id, gwportprefixes)
+
+
+class TestGetGwportprefixesByNavboxId:
+    def test_all_gwportprefixes_should_be_fetched_in_one_request(self):
+        api = make_api([gwportprefix("10.0.0.1")])
+        api._get_gwportprefixes_by_navbox_id()
+        api.get.assert_called_once_with(
+            "gwportprefix/", params={"page_size": PAGE_SIZE}
+        )
+
+    def test_gwportprefixes_should_be_grouped_by_netbox(self):
+        first = gwportprefix("10.0.0.1", navbox_id=10)
+        second = gwportprefix("10.0.1.1", navbox_id=20)
+        third = gwportprefix("10.0.2.1", navbox_id=10)
+        api = make_api([first, second, third])
+        assert api._get_gwportprefixes_by_navbox_id() == {
+            10: [first, third],
+            20: [second],
+        }
+
+    def test_gwportprefix_without_an_interface_should_be_skipped(self):
+        api = make_api([{"gw_ip": "10.0.0.1", "interface": None}])
+        assert api._get_gwportprefixes_by_navbox_id() == {}
+
+    def test_gwportprefix_without_a_netbox_should_be_skipped(self):
+        api = make_api([gwportprefix("10.0.0.1", navbox_id=None)])
+        assert api._get_gwportprefixes_by_navbox_id() == {}
+
+    def test_other_netboxes_should_not_get_the_interfaces(self):
+        api = make_api([gwportprefix("10.0.0.1", navbox_id=20)], {1: interface()})
+        assert get_interfaces_with_addresses(api, navbox_id=10) == []
+
+
 class TestGetInterfacesWithAddresses:
     def test_interface_with_one_address_should_be_returned(self):
         api = make_api(
             [gwportprefix("10.0.0.1", net_address="10.0.0.0/24")],
             {1: interface(ifname="Vlan10")},
         )
-        result = api._get_interfaces_with_addresses(10)
+        result = get_interfaces_with_addresses(api)
         assert len(result) == 1
         assert result[0].name == "Vlan10"
         assert [a.ip for a in result[0].addresses] == ["10.0.0.1"]
@@ -75,7 +112,7 @@ class TestGetInterfacesWithAddresses:
             ],
             {1: interface(ifname="Vlan10")},
         )
-        result = api._get_interfaces_with_addresses(10)
+        result = get_interfaces_with_addresses(api)
         assert len(result) == 1, "both addresses belong to the same interface"
         assert [a.ip for a in result[0].addresses] == ["10.0.0.1", "2001:db8::1"]
 
@@ -87,18 +124,12 @@ class TestGetInterfacesWithAddresses:
             ],
             {1: interface(id=1, ifname="Vlan10"), 2: interface(id=2, ifname="Vlan20")},
         )
-        result = api._get_interfaces_with_addresses(10)
+        result = get_interfaces_with_addresses(api)
         assert sorted(i.name for i in result) == ["Vlan10", "Vlan20"]
-
-    def test_the_gwportprefix_request_should_be_filtered_on_the_netbox(self):
-        api = make_api([gwportprefix("10.0.0.1")], {1: interface()})
-        api._get_interfaces_with_addresses(10)
-        assert api.get.call_args.args[0] == "gwportprefix/"
-        assert api.get.call_args.kwargs["params"] == {"interface__netbox": 10}
 
     def test_the_interface_request_should_be_filtered_on_the_netbox(self):
         api = make_api([gwportprefix("10.0.0.1")], {1: interface()})
-        api._get_interfaces_with_addresses(10)
+        get_interfaces_with_addresses(api)
         assert api.get_single.call_args.kwargs["params"] == {"netbox": 10}
 
     def test_each_interface_should_only_be_looked_up_once(self):
@@ -109,39 +140,39 @@ class TestGetInterfacesWithAddresses:
             ],
             {1: interface()},
         )
-        api._get_interfaces_with_addresses(10)
+        get_interfaces_with_addresses(api)
         assert api.get_single.call_count == 1
 
     def test_navbox_without_gwportprefixes_should_produce_no_interfaces(self):
         api = make_api([], {1: interface()})
-        assert api._get_interfaces_with_addresses(10) == []
+        assert get_interfaces_with_addresses(api) == []
         api.get_single.assert_not_called()
 
     def test_gwportprefix_with_incomplete_data_should_be_skipped(self):
         api = make_api([{"gw_ip": "10.0.0.1", "interface": None}], {1: interface()})
-        assert api._get_interfaces_with_addresses(10) == []
+        assert get_interfaces_with_addresses(api) == []
 
     def test_address_should_expose_the_prefix_it_belongs_to(self):
         api = make_api(
             [gwportprefix("10.130.12.1", net_address="10.130.12.0/22")],
             {1: interface()},
         )
-        result = api._get_interfaces_with_addresses(10)
+        result = get_interfaces_with_addresses(api)
         assert result[0].addresses[0].prefix == "10.130.12.0/22"
 
     def test_gwportprefix_without_a_prefix_should_have_no_prefix(self):
         api = make_api([gwportprefix("10.130.12.1")], {1: interface()})
-        result = api._get_interfaces_with_addresses(10)
+        result = get_interfaces_with_addresses(api)
         assert result[0].addresses[0].prefix is None
 
     def test_gw_ip_reported_with_a_mask_should_be_normalized(self):
         api = make_api([gwportprefix("10.0.0.1/24")], {1: interface()})
-        result = api._get_interfaces_with_addresses(10)
+        result = get_interfaces_with_addresses(api)
         assert [a.ip for a in result[0].addresses] == ["10.0.0.1"]
 
     def test_interface_without_ifname_should_be_skipped(self):
         api = make_api([gwportprefix("10.0.0.1")], {1: interface(ifname="")})
-        assert api._get_interfaces_with_addresses(10) == []
+        assert get_interfaces_with_addresses(api) == []
 
     def test_interface_on_a_different_navbox_should_be_skipped(self):
         api = make_api(
@@ -149,14 +180,14 @@ class TestGetInterfacesWithAddresses:
             {1: interface()},
             iface_params={"netbox": 20},
         )
-        assert api._get_interfaces_with_addresses(10) == []
+        assert get_interfaces_with_addresses(api) == []
 
     def test_description_should_prefer_ifalias_over_ifdescr(self):
         api = make_api(
             [gwportprefix("10.0.0.1")],
             {1: interface(ifalias="uplink", ifdescr="some descr")},
         )
-        result = api._get_interfaces_with_addresses(10)
+        result = get_interfaces_with_addresses(api)
         assert result[0].description == "uplink"
 
     def test_ifdescr_should_be_used_when_there_is_no_ifalias(self):
@@ -164,7 +195,7 @@ class TestGetInterfacesWithAddresses:
             [gwportprefix("10.0.0.1")],
             {1: interface(ifalias="", ifdescr="some descr")},
         )
-        result = api._get_interfaces_with_addresses(10)
+        result = get_interfaces_with_addresses(api)
         assert result[0].description == "some descr"
 
 
