@@ -1119,22 +1119,33 @@ class Syncer:
         upstream_device_role: Record,
         upstream_location: Optional[Record] = None,
     ):
+        # The device stays in 'upstream_devices' for the rest of the sync, but
+        # pynetbox only refreshes it from Netbox when there is a change to save.
+        # Related objects are therefore assigned as records rather than ids, and
+        # fields that only an id is known for are assigned only when they have
+        # changed, so that an unchanged device keeps its records for later steps
+        # to read.
         if "cnaas" in [upstream_tag.name for upstream_tag in upstream_device.tags]:
-            upstream_device.site = upstream_site.id
+            upstream_device.site = upstream_site
             if upstream_location:
-                upstream_device.location = upstream_location.id
+                upstream_device.location = upstream_location
 
         tag_ids = self._convert_tag_names_to_ids(device.tags, self.tags)
         upstream_device_tag_ids = self._get_tag_ids_from_tags(upstream_device.tags)
         tag_ids += [
             tag_id for tag_id in upstream_device_tag_ids if tag_id not in tag_ids
         ]
-        tag_ids.sort()
-        upstream_device.tags = tag_ids
+        if set(tag_ids) != set(upstream_device_tag_ids):
+            upstream_device.tags = sorted(tag_ids)
 
-        upstream_device.role = upstream_device_role.id
-        upstream_device.status = device.status
-        upstream_device.tenant = device.tenant
+        upstream_device.role = upstream_device_role
+        if not upstream_device.status or upstream_device.status.value != device.status:
+            upstream_device.status = device.status
+        upstream_tenant_id = (
+            upstream_device.tenant.id if upstream_device.tenant else None
+        )
+        if upstream_tenant_id != device.tenant:
+            upstream_device.tenant = device.tenant
         if device.url:
             upstream_device.custom_fields["nav_url"] = device.url
         upstream_device.custom_fields["nav_server"] = device.nav_server
@@ -1147,7 +1158,7 @@ class Syncer:
                 f"Got error while getting or creating device type for model {device.model}: {str(e)}. Not updating device type for device {device.name}."
             )
         else:
-            upstream_device.device_type = upstream_device_type.id
+            upstream_device.device_type = upstream_device_type
 
         if upstream_device.updates():
             _logger.debug(

@@ -1,6 +1,8 @@
 from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
+from pynetbox.core.response import Record
+
 from navsync.nav import ConnectionError
 from navsync.netbox import UpstreamDevices
 from navsync.parser import Device, Location, NavFetcher, Site
@@ -242,6 +244,78 @@ class TestRecordingNavServer:
         )
 
         assert upstream_device.custom_fields["nav_server"] == REACHABLE
+
+
+def netbox_device(**overrides):
+    """A real pynetbox record for a device that already matches make_device()"""
+    values = {
+        "id": 10,
+        "name": "sw1",
+        "device_type": {"id": 3, "model": "C9300"},
+        "role": {"id": 2, "slug": "switch"},
+        "site": {"id": 1, "slug": "site"},
+        "location": {"id": 4, "name": "room"},
+        "tenant": {"id": 1, "name": "tenant"},
+        "status": {"value": "active", "label": "Active"},
+        "tags": [{"id": 1, "name": "navsync"}],
+        "custom_fields": {"nav_server": REACHABLE},
+        **overrides,
+    }
+    return Record(values, MagicMock(), MagicMock())
+
+
+class TestUpdatingDevices:
+    def update(self, upstream_device, device_type=None):
+        syncer = make_syncer()
+        device = make_device()
+        device.status = "active"
+        syncer.get_or_create_device_type = MagicMock(
+            return_value=device_type or upstream_device.device_type
+        )
+        syncer.upstream_devices.save = MagicMock()
+        syncer._update_device(
+            device,
+            upstream_device,
+            upstream_device.site,
+            upstream_device.role,
+            upstream_device.location,
+        )
+
+    def test_an_unchanged_device_should_have_nothing_to_save(self):
+        upstream_device = netbox_device()
+
+        self.update(upstream_device)
+
+        assert upstream_device.updates() == {}
+
+    def test_an_unchanged_device_should_keep_its_related_records(self):
+        """Later steps of the sync read these, e.g. device_type.id for assets"""
+        upstream_device = netbox_device()
+
+        self.update(upstream_device)
+
+        assert upstream_device.device_type.id == 3
+        assert upstream_device.role.slug == "switch"
+        assert upstream_device.site.id == 1
+        assert upstream_device.location.id == 4
+
+    def test_a_changed_device_type_should_be_sent_as_an_id(self):
+        upstream_device = netbox_device()
+        new_type = Record({"id": 7, "model": "C9300X"}, MagicMock(), MagicMock())
+
+        self.update(upstream_device, device_type=new_type)
+
+        assert upstream_device.updates() == {"device_type": 7}
+
+    def test_a_changed_tenant_and_status_should_be_sent(self):
+        upstream_device = netbox_device(
+            tenant={"id": 9, "name": "other"},
+            status={"value": "planned", "label": "Planned"},
+        )
+
+        self.update(upstream_device)
+
+        assert upstream_device.updates() == {"tenant": 1, "status": "active"}
 
 
 def nav_server_info(url):
