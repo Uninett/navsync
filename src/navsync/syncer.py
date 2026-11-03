@@ -1171,6 +1171,8 @@ class Syncer:
             netbox_helpers.get_locations(self.netbox_api)
         )
         flat_locations: dict[str, dict[NameStr, Record]] = {}
+        synced_location_ids: set[int] = set()
+        synced_site_ids: set[int] = set()
 
         for site in sites:
             upstream_site = netbox_helpers.find_site(
@@ -1186,6 +1188,7 @@ class Syncer:
                     )
                     continue
                 upstream_sites.append(upstream_site)
+            synced_site_ids.add(upstream_site.id)
 
             self._sync_location_tree(
                 site.locations.values(),
@@ -1193,9 +1196,62 @@ class Syncer:
                 upstream_locations_by_slug,
                 upstream_locations_by_name,
                 flat_locations,
+                synced_location_ids,
             )
 
+        self._decommission_all_missing_locations(
+            upstream_locations_by_slug, synced_location_ids
+        )
+        self._decommission_all_missing_sites(upstream_sites, synced_site_ids)
+
         return flat_locations
+
+    def _decommission_all_missing_sites(
+        self, upstream_sites: Sequence[Record], synced_site_ids: set[int]
+    ):
+        """Retire any upstream sites that were registered by navsync but were not found in the current sync"""
+        for upstream_site in upstream_sites:
+            if upstream_site.id in synced_site_ids:
+                continue
+            tags = [tag.name for tag in upstream_site.tags]
+            if "navsync" not in tags or "cnaas" not in tags:
+                continue
+            if upstream_site.status.value == "retired":
+                continue
+            _logger.debug(f"Decommissioning site {upstream_site.name}")
+            upstream_site.status = "retired"
+            try:
+                upstream_site.save()
+            except RequestError as e:
+                _logger.error(f"Failed to decommission site {upstream_site.name}: {e}")
+
+    def _decommission_all_missing_locations(
+        self,
+        upstream_locations_by_slug: dict[
+            SlugStr, dict[SlugStr, dict[Optional[int], Record]]
+        ],
+        synced_location_ids: set[int],
+    ):
+        """Retire any upstream locations that were registered by navsync but were not found in the current sync"""
+        for locations_by_slug in upstream_locations_by_slug.values():
+            for locations_by_parent in locations_by_slug.values():
+                for upstream_location in locations_by_parent.values():
+                    if upstream_location.id in synced_location_ids:
+                        continue
+                    tags = [tag.name for tag in upstream_location.tags]
+                    if "navsync" not in tags or "cnaas" not in tags:
+                        continue
+                    if upstream_location.status.value == "retired":
+                        continue
+                    _logger.debug(f"Decommissioning location {upstream_location.name}")
+                    upstream_location.status = "retired"
+                    try:
+                        upstream_location.save()
+                    except RequestError as e:
+                        _logger.error(
+                            f"Failed to decommission location "
+                            f"{upstream_location.name}: {e}"
+                        )
 
     def _sync_location_tree(
         self,
@@ -1208,6 +1264,7 @@ class Syncer:
             SlugStr, dict[NameStr, dict[Optional[int], Record]]
         ],
         flat_locations: dict[str, dict[NameStr, Record]],
+        synced_location_ids: set[int],
         parent_id: Optional[int] = None,
     ):
         """Recursively syncs a location tree for a site, creating parents before children."""
@@ -1245,6 +1302,7 @@ class Syncer:
             flat_locations.setdefault(location.nav_server, {})[location.name] = (
                 upstream_location
             )
+            synced_location_ids.add(upstream_location.id)
 
             if location.child_locations:
                 self._sync_location_tree(
@@ -1253,6 +1311,7 @@ class Syncer:
                     upstream_locations_by_slug,
                     upstream_locations_by_name,
                     flat_locations,
+                    synced_location_ids,
                     upstream_location.id,
                 )
 
