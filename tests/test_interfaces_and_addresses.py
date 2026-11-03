@@ -5,6 +5,7 @@ import requests
 
 from navsync.nav import (
     PAGE_SIZE,
+    TIMEOUT,
     Api,
     AuthenticationError,
     ConnectionError,
@@ -332,7 +333,9 @@ class TestParseInterfaces:
         assert result[0].description is None
 
 
-def make_api_with_session(status_code=200, json_body=None, url_seen=None):
+def make_api_with_session(
+    status_code=200, json_body=None, url_seen=None, timeouts_seen=None
+):
     """Builds an Api whose HTTP session returns a canned response"""
     api = Api.__new__(Api)
     api.base_url = "http://nav.example.org/api/1/"
@@ -345,9 +348,11 @@ def make_api_with_session(status_code=200, json_body=None, url_seen=None):
         requests.HTTPError(f"{status_code}") if status_code >= 400 else None
     )
 
-    def session_get(url, params=None):
+    def session_get(url, params=None, timeout=None):
         if url_seen is not None:
             url_seen.append((url, params))
+        if timeouts_seen is not None:
+            timeouts_seen.append(timeout)
         return response
 
     api.session.get = session_get
@@ -372,6 +377,28 @@ class TestGet:
         )
         list(api.get("interface/", params={"netbox": 10}))
         assert url_seen[0][1] == {"page_size": PAGE_SIZE, "netbox": 10}
+
+
+class TestTimeout:
+    def test_list_requests_should_be_sent_with_a_timeout(self):
+        timeouts_seen = []
+        api = make_api_with_session(
+            json_body={"results": [], "next": None}, timeouts_seen=timeouts_seen
+        )
+        list(api.get("netbox/"))
+        assert timeouts_seen == [TIMEOUT]
+
+    def test_detail_requests_should_be_sent_with_a_timeout(self):
+        timeouts_seen = []
+        api = make_api_with_session(json_body={}, timeouts_seen=timeouts_seen)
+        api.get_single("interface/1/")
+        assert timeouts_seen == [TIMEOUT]
+
+    def test_a_request_that_times_out_should_raise_connection_error(self):
+        api = make_api_with_session()
+        api.session.get = MagicMock(side_effect=requests.Timeout("timed out"))
+        with pytest.raises(ConnectionError):
+            list(api.get("netbox/"))
 
 
 class TestGetSingle:

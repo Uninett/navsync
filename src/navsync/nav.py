@@ -13,6 +13,10 @@ _logger = getLogger(__name__)
 # asking for more than that is harmless.
 PAGE_SIZE = 1000
 
+# How long to wait, in seconds, for a Nav server to accept a connection and to
+# send a response, before giving up on it
+TIMEOUT = (10, 120)
+
 
 @dataclass
 class NavBoxEntity:
@@ -137,7 +141,7 @@ class Api:
         params = {"page_size": PAGE_SIZE, **(params or {})}
         while url:
             try:
-                response = self.session.get(url, params=params)
+                response = self.session.get(url, params=params, timeout=TIMEOUT)
                 # Nav's 'next' link already contains the query parameters, so
                 # they must not be sent again for the subsequent pages
                 params = None
@@ -164,7 +168,7 @@ class Api:
         """
         url = self.base_url + path.lstrip("/")
         try:
-            response = self.session.get(url, params=params)
+            response = self.session.get(url, params=params, timeout=TIMEOUT)
             if response.status_code == 404:
                 return None
             response.raise_for_status()
