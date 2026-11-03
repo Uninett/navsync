@@ -116,6 +116,7 @@ These are matched by name. If a role is missing, the sync is aborted.
 | `nav_url`          | Site, Location, Device       | Text/URL              |
 | `software_version` | Asset (inventory)            | Text                  |
 | `owner`            | Virtual machine              | Object (Tenant)       |
+| `nav_server`       | Site, Location, Device, Virtual chassis, Asset (inventory) | Text |
 
 **NAV servers**
 

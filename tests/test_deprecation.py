@@ -9,6 +9,7 @@ def make_syncer():
     syncer = Syncer.__new__(Syncer)
     syncer.netbox_api = MagicMock()
     syncer.tags = {"navsync": 1, "cnaas": 2}
+    syncer.unreachable_nav_servers = set()
     return syncer
 
 

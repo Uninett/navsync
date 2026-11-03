@@ -42,6 +42,7 @@ class Syncer:
     issuer: str
     https: bool
     nosync: bool
+    unreachable_nav_servers: set[str]
 
     def __init__(
         self,
@@ -58,6 +59,7 @@ class Syncer:
         self.issuer = issuer
         self.https = https
         self.nosync = nosync
+        self.unreachable_nav_servers = set()
 
     def sync(self):
         """
@@ -110,6 +112,8 @@ class Syncer:
         )
         self.upstream_manufacturers = netbox_helpers.get_manufacturers(self.netbox_api)
 
+        self.unreachable_nav_servers = nav_data.unreachable_nav_servers
+
         flat_locations = self._sync_sites_and_locations(nav_data.sites)
         self._sync_devices(nav_data.devices, flat_locations)
         self._sync_assets(assets)
@@ -148,6 +152,19 @@ class Syncer:
             nosync=nosync,
         )
 
+    def _is_from_unreachable_nav_server(self, upstream_record: Record) -> bool:
+        """
+        Returns whether the given object was synced from a NAV server that is
+        still registered to be synced from, but could not be fetched from in
+        this sync.
+
+        Such an object is missing from the sync only because its NAV server did
+        not respond, so it must not be decommissioned. Objects without a
+        recorded NAV server are not considered to be from an unreachable one.
+        """
+        nav_server = (upstream_record.custom_fields or {}).get("nav_server")
+        return bool(nav_server) and nav_server in self.unreachable_nav_servers
+
     def _sync_virtual_chassis(self, chassis: dict[NameStr, VirtualChassis]):
         upstream_chassis = netbox_helpers.get_virtual_chassis(self.netbox_api)
         upstream_devices = netbox_helpers.get_devices(self.netbox_api)
@@ -181,6 +198,12 @@ class Syncer:
                 hasattr(upstream_vc, "role")
                 and upstream_vc.role.slug == "verktykassecnaas"
             ):
+                continue
+            if self._is_from_unreachable_nav_server(upstream_vc):
+                _logger.debug(
+                    f"Not deleting virtual chassis {upstream_vc.name}, since its "
+                    "NAV server could not be reached"
+                )
                 continue
             try:
                 self._unregister_devices_as_members_of_vc(upstream_vc, upstream_devices)
@@ -223,6 +246,7 @@ class Syncer:
         new_virtual_chassis = {
             "name": virtual_chassis.name,
             "tags": tag_ids,
+            "custom_fields": {"nav_server": virtual_chassis.nav_server},
         }
         _logger.debug(f"Creating new virtual chassis {virtual_chassis.name}")
         try:
@@ -258,6 +282,9 @@ class Syncer:
         ]
         tag_ids.sort()
         upstream_virtual_chassis.tags = tag_ids
+        upstream_virtual_chassis.custom_fields["nav_server"] = (
+            virtual_chassis.nav_server
+        )
         if upstream_virtual_chassis.updates():
             _logger.debug(
                 f"Updating virtual chassis {upstream_virtual_chassis.name}: {upstream_virtual_chassis.updates()}"
@@ -318,7 +345,10 @@ class Syncer:
             "tenant": asset.tenant,
             "device": upstream_device.id,
             "device_type": upstream_device.device_type.id,
-            "custom_fields": {"software_version": asset.software_version},
+            "custom_fields": {
+                "software_version": asset.software_version,
+                "nav_server": asset.nav_server,
+            },
         }
 
         _logger.debug(f"Creating new asset {asset.serial}")
@@ -342,6 +372,7 @@ class Syncer:
             # Merge into the existing dict so _diff() compares equal dicts when the value
             # hasn't changed. Replacing with a subset dict triggers a spurious update.
             upstream_asset.custom_fields["software_version"] = asset.software_version
+        upstream_asset.custom_fields["nav_server"] = asset.nav_server
         tag_ids = self._convert_tag_names_to_ids(asset.tags, self.tags)
         upstream_asset_tag_ids = self._get_tag_ids_from_tags(upstream_asset.tags)
         tag_ids += [
@@ -390,6 +421,12 @@ class Syncer:
                 if "navsync" not in tags or "cnaas" not in tags:
                     continue
                 if upstream_asset.status != "used":
+                    continue
+                if self._is_from_unreachable_nav_server(upstream_asset):
+                    _logger.debug(
+                        f"Not shelving asset {upstream_asset.serial}, since its "
+                        "NAV server could not be reached"
+                    )
                     continue
                 self._shelve_asset(upstream_asset)
 
@@ -989,6 +1026,12 @@ class Syncer:
                 and upstream_device.status.value != "offline"
             ):
                 continue
+            if self._is_from_unreachable_nav_server(upstream_device):
+                _logger.debug(
+                    f"Not decommissioning device {upstream_device.name}, since its "
+                    "NAV server could not be reached"
+                )
+                continue
             _logger.debug(f"Decommissioning device {upstream_device.name}")
             # The addresses have to be unassigned before the primary IP fields
             # are cleared, since Netbox refuses to unassign an address that is
@@ -1063,8 +1106,9 @@ class Syncer:
         }
         if upstream_location:
             new_device_dict["location"] = upstream_location.id
+        new_device_dict["custom_fields"] = {"nav_server": device.nav_server}
         if device.url:
-            new_device_dict["custom_fields"] = {"nav_url": device.url}
+            new_device_dict["custom_fields"]["nav_url"] = device.url
 
         _logger.debug(f"Creating new device {device.name}")
         try:
@@ -1098,6 +1142,7 @@ class Syncer:
         upstream_device.tenant = device.tenant
         if device.url:
             upstream_device.custom_fields["nav_url"] = device.url
+        upstream_device.custom_fields["nav_server"] = device.nav_server
         try:
             upstream_device_type = self.get_or_create_device_type(
                 device.manufacturer, device.model
@@ -1218,6 +1263,12 @@ class Syncer:
                 continue
             if upstream_site.status.value == "retired":
                 continue
+            if self._is_from_unreachable_nav_server(upstream_site):
+                _logger.debug(
+                    f"Not decommissioning site {upstream_site.name}, since its "
+                    "NAV server could not be reached"
+                )
+                continue
             _logger.debug(f"Decommissioning site {upstream_site.name}")
             upstream_site.status = "retired"
             try:
@@ -1242,6 +1293,12 @@ class Syncer:
                     if "navsync" not in tags or "cnaas" not in tags:
                         continue
                     if upstream_location.status.value == "retired":
+                        continue
+                    if self._is_from_unreachable_nav_server(upstream_location):
+                        _logger.debug(
+                            f"Not decommissioning location {upstream_location.name}, "
+                            "since its NAV server could not be reached"
+                        )
                         continue
                     _logger.debug(f"Decommissioning location {upstream_location.name}")
                     upstream_location.status = "retired"
@@ -1334,8 +1391,9 @@ class Syncer:
             new_location_dict["parent"] = parent_id
         if location.description:
             new_location_dict["description"] = location.description
+        new_location_dict["custom_fields"] = {"nav_server": location.nav_server}
         if location.url:
-            new_location_dict["custom_fields"] = {"nav_url": location.url}
+            new_location_dict["custom_fields"]["nav_url"] = location.url
         _logger.debug(
             f"Creating new location {location.name} under site {upstream_site.name}"
         )
@@ -1368,6 +1426,7 @@ class Syncer:
         upstream_location.status = location.status
         if location.url is not None:
             upstream_location.custom_fields["nav_url"] = location.url
+        upstream_location.custom_fields["nav_server"] = location.nav_server
 
         if upstream_location.updates():
             _logger.debug(
@@ -1406,6 +1465,7 @@ class Syncer:
             upstream_site.region = site.region
         if site.url is not None:
             upstream_site.custom_fields["nav_url"] = site.url
+        upstream_site.custom_fields["nav_server"] = site.nav_server
 
         tag_ids = self._convert_tag_names_to_ids(site.tags, self.tags)
         upstream_site_tag_ids = self._get_tag_ids_from_tags(upstream_site.tags)
@@ -1443,8 +1503,9 @@ class Syncer:
             new_site_dict["description"] = site.description
         if site.region:
             new_site_dict["region"] = site.region
+        new_site_dict["custom_fields"] = {"nav_server": site.nav_server}
         if site.url:
-            new_site_dict["custom_fields"] = {"nav_url": site.url}
+            new_site_dict["custom_fields"]["nav_url"] = site.url
         _logger.debug(f"Creating new site {site.name}")
         try:
             return self.netbox_api.dcim.sites.create(**new_site_dict)
