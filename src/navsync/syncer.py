@@ -115,11 +115,14 @@ class Syncer:
 
         self.unreachable_nav_servers = nav_data.unreachable_nav_servers
 
-        flat_locations = self._sync_sites_and_locations(nav_data.sites)
+        # Sites created while syncing them are added to 'upstream_sites', so that
+        # devices can be placed in them
+        upstream_sites = netbox_helpers.get_sites(self.netbox_api)
+        flat_locations = self._sync_sites_and_locations(nav_data.sites, upstream_sites)
         # Fetched once and kept up to date by every step below, since they all
         # change devices
         self.upstream_devices = netbox_helpers.UpstreamDevices.fetch(self.netbox_api)
-        self._sync_devices(nav_data.devices, flat_locations)
+        self._sync_devices(nav_data.devices, flat_locations, upstream_sites)
         self._sync_assets(assets)
         self._sync_prefixes(nav_data.devices)
         self._sync_interfaces_and_ip_addresses(nav_data.devices)
@@ -449,8 +452,8 @@ class Syncer:
         self,
         devices: dict[NameStr, Device],
         flat_locations: dict[str, dict[NameStr, Record]],
+        upstream_sites: Sequence[Record],
     ):
-        upstream_sites = netbox_helpers.get_sites(self.netbox_api)
         upstream_device_roles_by_name = netbox_helpers.get_device_roles(self.netbox_api)
 
         self._decommission_all_missing_devices(devices, self.upstream_devices.values())
@@ -1213,11 +1216,12 @@ class Syncer:
         return upstream_manufacturer
 
     def _sync_sites_and_locations(
-        self, sites: Sequence[Site]
+        self, sites: Sequence[Site], upstream_sites: list[Record]
     ) -> dict[str, dict[NameStr, Record]]:
         """Syncs sites and their nested location hierarchies to Netbox.
-        Returns a map of nav_server -> location_name -> upstream Record for use by device syncing."""
-        upstream_sites = netbox_helpers.get_sites(self.netbox_api)
+        Returns a map of nav_server -> location_name -> upstream Record for use by device syncing.
+
+        Every site created is added to 'upstream_sites'."""
         upstream_locations_by_slug, upstream_locations_by_name = (
             netbox_helpers.get_locations(self.netbox_api)
         )
