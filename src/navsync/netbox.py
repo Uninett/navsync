@@ -29,6 +29,10 @@ SerialStr = str
 # The Netbox role a device or VM must have to be treated as a NAV instance
 VERKTOYKASSE_ROLE = "verktykassecnaas"
 
+# Rendering config contexts is the most expensive part of listing devices and
+# VMs in Netbox, and navsync has no use for them, so they are left out
+WITHOUT_CONFIG_CONTEXT = {"exclude": "config_context"}
+
 _logger = logging.getLogger(__name__)
 
 
@@ -75,7 +79,10 @@ def get_device_roles(api: netbox.Api) -> dict[NameStr, Record]:
 
 def get_devices(api: netbox.Api) -> dict[NameStr, Record]:
     """Returns dict mapping name to device"""
-    return {device.name: device for device in api.dcim.devices.all()}
+    return {
+        device.name: device
+        for device in api.dcim.devices.filter(**WITHOUT_CONFIG_CONTEXT)
+    }
 
 
 def get_sites(api: netbox.Api) -> list[Record]:
@@ -195,9 +202,11 @@ def get_nav_servers(api: netbox.Api, https: bool) -> Iterable[NavServerInfo]:
     :param https: whether the NAV instances are reachable over https
     """
     virtual_machines = api.virtualization.virtual_machines.filter(
-        role=VERKTOYKASSE_ROLE, status="active"
+        role=VERKTOYKASSE_ROLE, status="active", **WITHOUT_CONFIG_CONTEXT
     )
-    devices = api.dcim.devices.filter(role=VERKTOYKASSE_ROLE, status="active")
+    devices = api.dcim.devices.filter(
+        role=VERKTOYKASSE_ROLE, status="active", **WITHOUT_CONFIG_CONTEXT
+    )
     for vm in virtual_machines:
         if not vm.tags or "navsync" not in [tag.name for tag in vm.tags]:
             _logger.debug(

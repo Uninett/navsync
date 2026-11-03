@@ -16,6 +16,33 @@ def upstream_ip_address(address="10.0.0.1/24"):
     return ip_address
 
 
+class TestGetDevices:
+    def test_devices_should_be_keyed_by_name(self):
+        api = MagicMock()
+        device = MagicMock()
+        device.name = "sw1"
+        api.dcim.devices.filter.return_value = [device]
+        assert netbox_helpers.get_devices(api) == {"sw1": device}
+
+    def test_config_context_should_not_be_fetched(self):
+        api = MagicMock()
+        api.dcim.devices.filter.return_value = []
+        netbox_helpers.get_devices(api)
+        api.dcim.devices.filter.assert_called_once_with(exclude="config_context")
+
+
+class TestGetNavServers:
+    def test_config_context_should_not_be_fetched(self):
+        api = MagicMock()
+        api.virtualization.virtual_machines.filter.return_value = []
+        api.dcim.devices.filter.return_value = []
+        list(netbox_helpers.get_nav_servers(api, https=True))
+        vm_filters = api.virtualization.virtual_machines.filter.call_args.kwargs
+        device_filters = api.dcim.devices.filter.call_args.kwargs
+        assert vm_filters["exclude"] == "config_context"
+        assert device_filters["exclude"] == "config_context"
+
+
 class TestGetInterfaces:
     def test_interfaces_should_be_keyed_by_device_id_and_name(self):
         api = MagicMock()
