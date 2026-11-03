@@ -49,26 +49,22 @@ def get_manufacturers(api: netbox.Api) -> dict[SlugStr, Record]:
     }
 
 
-def get_device_types_by_part_number(
+def get_device_types(
     api: netbox.Api,
-) -> dict[SlugStr, dict[str, Record]]:
-    """Returns dict mapping manufacturer slug to part numbers and device types"""
-    device_types: dict[SlugStr, dict[str, Record]] = {}
+) -> tuple[dict[SlugStr, dict[str, Record]], dict[SlugStr, dict[str, Record]]]:
+    """
+    Returns (by_part_number, by_model): manufacturer slug -> part number/model
+    -> device type.
+    """
+    by_part_number: dict[SlugStr, dict[str, Record]] = {}
+    by_model: dict[SlugStr, dict[str, Record]] = {}
     for device_type in api.dcim.device_types.all():
-        device_types.setdefault(device_type.manufacturer.slug, {})[
-            device_type.part_number
-        ] = device_type
-    return device_types
-
-
-def get_device_types_by_model(api: netbox.Api) -> dict[SlugStr, dict[str, Record]]:
-    """Returns dict mapping manufacturer slug to models and device types"""
-    device_types: dict[SlugStr, dict[str, Record]] = {}
-    for device_type in api.dcim.device_types.all():
-        device_types.setdefault(device_type.manufacturer.slug, {})[
-            device_type.model
-        ] = device_type
-    return device_types
+        manufacturer_slug = device_type.manufacturer.slug
+        by_part_number.setdefault(manufacturer_slug, {})[device_type.part_number] = (
+            device_type
+        )
+        by_model.setdefault(manufacturer_slug, {})[device_type.model] = device_type
+    return by_part_number, by_model
 
 
 def get_device_roles(api: netbox.Api) -> dict[NameStr, Record]:

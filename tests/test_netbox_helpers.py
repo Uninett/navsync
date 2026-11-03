@@ -108,6 +108,36 @@ class TestGetNavServers:
         assert device_filters["exclude"] == "config_context"
 
 
+def upstream_device_type(manufacturer="cisco", model="C9300", part_number="C9300-48"):
+    device_type = MagicMock()
+    device_type.manufacturer.slug = manufacturer
+    device_type.model = model
+    device_type.part_number = part_number
+    return device_type
+
+
+class TestGetDeviceTypes:
+    def test_device_types_should_be_fetched_once(self):
+        api = MagicMock()
+        api.dcim.device_types.all.return_value = [upstream_device_type()]
+        netbox_helpers.get_device_types(api)
+        api.dcim.device_types.all.assert_called_once()
+
+    def test_device_types_should_be_keyed_by_manufacturer_and_part_number(self):
+        api = MagicMock()
+        device_type = upstream_device_type()
+        api.dcim.device_types.all.return_value = [device_type]
+        by_part_number, _ = netbox_helpers.get_device_types(api)
+        assert by_part_number == {"cisco": {"C9300-48": device_type}}
+
+    def test_device_types_should_be_keyed_by_manufacturer_and_model(self):
+        api = MagicMock()
+        device_type = upstream_device_type()
+        api.dcim.device_types.all.return_value = [device_type]
+        _, by_model = netbox_helpers.get_device_types(api)
+        assert by_model == {"cisco": {"C9300": device_type}}
+
+
 class TestGetInterfaces:
     def test_interfaces_should_be_keyed_by_device_id_and_name(self):
         api = MagicMock()

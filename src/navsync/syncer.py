@@ -105,12 +105,10 @@ class Syncer:
             + ip_addresses
             + prefixes
         )
-        self.upstream_device_types_by_part_number = (
-            netbox_helpers.get_device_types_by_part_number(self.netbox_api)
-        )
-        self.upstream_device_types_by_model = netbox_helpers.get_device_types_by_model(
-            self.netbox_api
-        )
+        (
+            self.upstream_device_types_by_part_number,
+            self.upstream_device_types_by_model,
+        ) = netbox_helpers.get_device_types(self.netbox_api)
         self.upstream_manufacturers = netbox_helpers.get_manufacturers(self.netbox_api)
 
         self.unreachable_nav_servers = nav_data.unreachable_nav_servers
