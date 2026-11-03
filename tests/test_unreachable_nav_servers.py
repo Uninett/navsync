@@ -265,7 +265,6 @@ class TestFetchingFromUnreachableNavServers:
         )
         fetcher.generate_nav_token = lambda aud: "token"
         with (
-            patch("navsync.parser.time.sleep"),
             patch("navsync.parser.LocationHierarchyParser", location_parser),
             patch("navsync.parser.EntityParser", entity_parser),
         ):
