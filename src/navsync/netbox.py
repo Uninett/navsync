@@ -10,7 +10,7 @@ without a syncer instance.
 """
 
 import logging
-from ipaddress import ip_interface
+from ipaddress import ip_interface, ip_network
 from typing import Iterable, Optional, Sequence
 
 import pynetbox.core.api as netbox
@@ -259,6 +259,43 @@ def host_address(address: str) -> Optional[str]:
     except ValueError:
         _logger.warning("Could not parse IP address %r", address)
         return None
+
+
+def get_prefixes_in_use(api: netbox.Api, prefixes: Iterable[str]) -> set[str]:
+    """
+    Returns which of the given prefixes (e.g. '158.38.1.0/24') hold at least one
+    IP address that is not deprecated, no matter who registered it.
+
+    Prefixes that cannot be parsed are left out.
+    """
+    prefix_by_network = {}
+    for prefix in prefixes:
+        try:
+            prefix_by_network[ip_network(prefix, strict=False)] = prefix
+        except ValueError:
+            _logger.warning("Could not parse prefix %r", prefix)
+    prefix_lengths_by_version: dict[int, set[int]] = {}
+    for network in prefix_by_network:
+        prefix_lengths_by_version.setdefault(network.version, set()).add(
+            network.prefixlen
+        )
+
+    in_use: set[str] = set()
+    for chunk in _chunks(sorted(prefix_by_network.values())):
+        for upstream_ip_address in api.ipam.ip_addresses.filter(
+            parent=chunk, status__n="deprecated", brief=1
+        ):
+            host = host_address(str(upstream_ip_address.address))
+            if host is None:
+                continue
+            ip = ip_interface(host).ip
+            # An address can sit in several of the prefixes, e.g. both a /16
+            # and a /24 inside it
+            for prefix_length in prefix_lengths_by_version.get(ip.version, ()):
+                network = ip_network(f"{ip}/{prefix_length}", strict=False)
+                if network in prefix_by_network:
+                    in_use.add(prefix_by_network[network])
+    return in_use
 
 
 def get_prefixes(api: netbox.Api) -> dict[str, Record]:

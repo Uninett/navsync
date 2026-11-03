@@ -230,6 +230,51 @@ class TestGetIpAddresses:
         api.ipam.ip_addresses.filter.assert_not_called()
 
 
+class TestGetPrefixesInUse:
+    def test_a_prefix_holding_an_address_should_be_in_use(self):
+        api = MagicMock()
+        api.ipam.ip_addresses.filter.return_value = [upstream_ip_address("10.0.0.1/32")]
+        result = netbox_helpers.get_prefixes_in_use(api, ["10.0.0.0/24", "10.0.1.0/24"])
+        assert result == {"10.0.0.0/24"}
+
+    def test_every_prefix_holding_an_address_should_be_in_use(self):
+        """An address in a /24 is also in the /16 around it"""
+        api = MagicMock()
+        api.ipam.ip_addresses.filter.return_value = [upstream_ip_address("10.0.0.1/24")]
+        result = netbox_helpers.get_prefixes_in_use(api, ["10.0.0.0/16", "10.0.0.0/24"])
+        assert result == {"10.0.0.0/16", "10.0.0.0/24"}
+
+    def test_ipv6_prefixes_should_be_supported(self):
+        api = MagicMock()
+        api.ipam.ip_addresses.filter.return_value = [
+            upstream_ip_address("2001:db8::1/128")
+        ]
+        result = netbox_helpers.get_prefixes_in_use(
+            api, ["2001:db8::/64", "10.0.0.0/8"]
+        )
+        assert result == {"2001:db8::/64"}
+
+    def test_only_addresses_in_use_should_be_fetched(self):
+        api = MagicMock()
+        api.ipam.ip_addresses.filter.return_value = []
+        netbox_helpers.get_prefixes_in_use(api, ["10.0.1.0/24", "10.0.0.0/24"])
+        api.ipam.ip_addresses.filter.assert_called_once_with(
+            parent=["10.0.0.0/24", "10.0.1.0/24"], status__n="deprecated", brief=1
+        )
+
+    def test_unparseable_prefixes_should_be_left_out(self):
+        api = MagicMock()
+        api.ipam.ip_addresses.filter.return_value = []
+        assert netbox_helpers.get_prefixes_in_use(api, ["nonsense"]) == set()
+        api.ipam.ip_addresses.filter.assert_not_called()
+
+    def test_no_prefixes_should_mean_no_request(self):
+        """An empty filter would match every IP address in Netbox"""
+        api = MagicMock()
+        assert netbox_helpers.get_prefixes_in_use(api, []) == set()
+        api.ipam.ip_addresses.filter.assert_not_called()
+
+
 class TestHostAddress:
     def test_mask_should_be_stripped(self):
         assert netbox_helpers.host_address("10.0.0.1/24") == "10.0.0.1"

@@ -637,12 +637,22 @@ class Syncer:
         not register those addresses itself, since something in it is evidently
         still in use.
         """
-        for upstream_prefix in self.netbox_api.ipam.prefixes.filter(
-            tag=["navsync", "cnaas"]
-        ):
-            if str(upstream_prefix.status) == "Deprecated":
-                continue
-            if self._prefix_holds_ip_addresses(upstream_prefix):
+        upstream_prefixes = [
+            upstream_prefix
+            for upstream_prefix in self.netbox_api.ipam.prefixes.filter(
+                tag=["navsync", "cnaas"]
+            )
+            if str(upstream_prefix.status) != "Deprecated"
+        ]
+        # Deprecated addresses do not count: a prefix holding nothing but
+        # addresses that have themselves gone out of use is no longer in use
+        # either
+        prefixes_in_use = netbox_helpers.get_prefixes_in_use(
+            self.netbox_api,
+            [str(upstream_prefix.prefix) for upstream_prefix in upstream_prefixes],
+        )
+        for upstream_prefix in upstream_prefixes:
+            if str(upstream_prefix.prefix) in prefixes_in_use:
                 continue
             _logger.debug(f"Deprecating empty prefix {upstream_prefix.prefix}")
             upstream_prefix.status = "deprecated"
@@ -652,22 +662,6 @@ class Syncer:
                 _logger.error(
                     f"Failed to deprecate prefix {upstream_prefix.prefix}: {e}"
                 )
-
-    def _prefix_holds_ip_addresses(self, upstream_prefix: Record) -> bool:
-        """
-        Returns whether any IP address that is still in use sits inside the
-        given prefix, no matter who registered it.
-
-        Deprecated addresses do not count: a prefix holding nothing but
-        addresses that have themselves gone out of use is no longer in use
-        either. Addresses registered by someone else do count, since something
-        in the prefix is evidently still live.
-        """
-        return bool(
-            self.netbox_api.ipam.ip_addresses.count(
-                parent=str(upstream_prefix.prefix), status__n="deprecated"
-            )
-        )
 
     def _sync_interfaces_and_ip_addresses(self, devices: dict[NameStr, Device]):
         """
