@@ -694,7 +694,16 @@ class Syncer:
                 if (upstream_device := self.upstream_devices.get(name))
             ],
         )
-        upstream_ip_addresses = netbox_helpers.get_ip_addresses(self.netbox_api)
+        upstream_ip_addresses = netbox_helpers.get_ip_addresses(
+            self.netbox_api,
+            hosts=[
+                host
+                for device in devices_with_interfaces.values()
+                for interface in device.interfaces
+                for address in interface.addresses
+                if (host := netbox_helpers.host_address(address.address))
+            ],
+        )
 
         for device_name, device in devices_with_interfaces.items():
             upstream_device = self.upstream_devices.get(device_name)

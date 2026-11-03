@@ -223,10 +223,10 @@ def get_interfaces(
     return interfaces
 
 
-def get_ip_addresses(api: netbox.Api) -> dict[str, Record]:
+def get_ip_addresses(api: netbox.Api, hosts: Iterable[str]) -> dict[str, Record]:
     """
     Returns dict mapping host address (without mask, e.g. '10.0.0.1') to IP
-    address.
+    address, for the given host addresses that are registered in Netbox.
 
     Netbox enforces uniqueness on the host address, not on the address together
     with its mask, so '10.0.0.1/24' and '10.0.0.1/32' are the same address to
@@ -234,14 +234,18 @@ def get_ip_addresses(api: netbox.Api) -> dict[str, Record]:
     in NAV is recognized, instead of being created again and rejected as a
     duplicate.
 
+    Netbox matches host addresses given without a mask against the host part of
+    its addresses, so an address is found whatever mask it is registered with.
+
     Addresses that cannot be parsed are left out.
     """
     ip_addresses: dict[str, Record] = {}
-    for ip_address in api.ipam.ip_addresses.all():
-        host = host_address(str(ip_address.address))
-        if host is None:
-            continue
-        ip_addresses[host] = ip_address
+    for chunk in _chunks(sorted(set(hosts))):
+        for ip_address in api.ipam.ip_addresses.filter(address=chunk):
+            host = host_address(str(ip_address.address))
+            if host is None:
+                continue
+            ip_addresses[host] = ip_address
     return ip_addresses
 
 

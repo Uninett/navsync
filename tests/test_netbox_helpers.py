@@ -189,19 +189,45 @@ class TestGetIpAddresses:
         """Netbox enforces uniqueness on the host address, not on the mask"""
         api = MagicMock()
         ip_address = upstream_ip_address("10.0.0.1/24")
-        api.ipam.ip_addresses.all.return_value = [ip_address]
-        assert netbox_helpers.get_ip_addresses(api) == {"10.0.0.1": ip_address}
+        api.ipam.ip_addresses.filter.return_value = [ip_address]
+        result = netbox_helpers.get_ip_addresses(api, hosts=["10.0.0.1"])
+        assert result == {"10.0.0.1": ip_address}
 
     def test_ipv6_addresses_should_be_keyed_by_host_address(self):
         api = MagicMock()
         ip_address = upstream_ip_address("2001:db8::1/64")
-        api.ipam.ip_addresses.all.return_value = [ip_address]
-        assert netbox_helpers.get_ip_addresses(api) == {"2001:db8::1": ip_address}
+        api.ipam.ip_addresses.filter.return_value = [ip_address]
+        result = netbox_helpers.get_ip_addresses(api, hosts=["2001:db8::1"])
+        assert result == {"2001:db8::1": ip_address}
 
     def test_unparseable_addresses_should_be_skipped(self):
         api = MagicMock()
-        api.ipam.ip_addresses.all.return_value = [upstream_ip_address("not-an-address")]
-        assert netbox_helpers.get_ip_addresses(api) == {}
+        api.ipam.ip_addresses.filter.return_value = [
+            upstream_ip_address("not-an-address")
+        ]
+        assert netbox_helpers.get_ip_addresses(api, hosts=["10.0.0.1"]) == {}
+
+    def test_only_the_given_hosts_should_be_fetched(self):
+        """Netbox matches hosts given without a mask whatever their mask"""
+        api = MagicMock()
+        api.ipam.ip_addresses.filter.return_value = []
+        netbox_helpers.get_ip_addresses(api, hosts=["10.0.0.2", "10.0.0.1", "10.0.0.1"])
+        api.ipam.ip_addresses.filter.assert_called_once_with(
+            address=["10.0.0.1", "10.0.0.2"]
+        )
+
+    def test_many_hosts_should_be_split_across_requests(self):
+        api = MagicMock()
+        api.ipam.ip_addresses.filter.return_value = []
+        hosts = [f"10.0.{i // 256}.{i % 256}" for i in range(150)]
+        netbox_helpers.get_ip_addresses(api, hosts=hosts)
+        assert api.ipam.ip_addresses.filter.call_count == 2
+
+    def test_no_hosts_should_mean_no_request(self):
+        """An empty filter would match every IP address in Netbox"""
+        api = MagicMock()
+        assert netbox_helpers.get_ip_addresses(api, hosts=[]) == {}
+        api.ipam.ip_addresses.filter.assert_not_called()
 
 
 class TestHostAddress:
