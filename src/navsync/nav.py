@@ -15,21 +15,6 @@ PAGE_SIZE = 1000
 
 
 @dataclass
-class NavLocation:
-    """Represents a 'location' model instance from Nav"""
-
-    _id: str
-    _parent_id: Optional[str]
-
-    name: str
-    description: str
-    data: dict[str, Optional[str]]
-
-    parent: Optional[Self] = dataclasses.field(repr=False)
-    children: list[Self] = dataclasses.field(repr=False)
-
-
-@dataclass
 class NavBoxEntity:
     """Represents a 'netbox entity' model instance from Nav"""
 
@@ -95,7 +80,6 @@ class NavBox:
     """Represents a 'netbox' model instance from Nav"""
 
     _id: int
-    _room_location_id: str
 
     sysname: str
     ip: str
@@ -112,7 +96,6 @@ class NavBox:
     room_longitude: Optional[float]
     room_description: str
     room_data: dict[str, Optional[str]]
-    room_location: Optional[NavLocation]
 
     # Every interface on this navbox that has at least one IP address assigned
     # to it, as reported by Nav's gwportprefix data. The interface holding the
@@ -206,7 +189,6 @@ class Api:
         start = time.time()
         box_by_id = self._get_unfilled_navboxes_by_id()
         entity_by_id = self._get_unfilled_navboxentities_by_id()
-        location_by_id = self._get_unfilled_locations_by_id()
         end = time.time()
         _logger.debug(
             "Getting all models from %s took %.6f seconds", self.base_url, end - start
@@ -221,17 +203,6 @@ class Api:
                 parent = entity_by_id[entity._parent_id]
                 parent.children.append(entity)
                 entity.parent = parent
-
-        # fill in relations between locations in 'location_by_id'
-        for location in location_by_id.values():
-            if location._parent_id is not None:
-                parent = location_by_id[location._parent_id]
-                parent.children.append(location)
-                location.parent = parent
-
-        # fill in relations between boxes in 'box_by_id' and locations in 'location_by_id'
-        for box in box_by_id.values():
-            box.room_location = location_by_id[box._room_location_id]
 
         end = time.time()
         _logger.debug(
@@ -279,8 +250,6 @@ class Api:
         for json in model_instance_json_list:
             box = NavBox(
                 _id=json["id"],
-                _room_location_id=json["room"]["location"],
-                room_location=None,
                 interfaces=[],
                 entities=[],
                 sysname=json["sysname"],
@@ -437,29 +406,6 @@ class Api:
                 )
             )
         return interfaces
-
-    def _get_unfilled_locations_by_id(self) -> dict[str, NavLocation]:
-        """
-        Get all 'location' model instances from Nav and return a map from their ids to
-        their NavOrganization representation.
-
-        Any reference in NavLocation to other Nav objects is not filled in and is set to
-        None (or an empty list, etc.)
-        """
-        location_by_id = {}
-        model_instance_json_list = self.get("location/")
-        for json in model_instance_json_list:
-            location = NavLocation(
-                _id=json["id"],
-                _parent_id=json["parent"],
-                parent=None,
-                children=[],
-                name=json["id"],
-                description=json["description"],
-                data=json["data"],
-            )
-            location_by_id[json["id"]] = location
-        return location_by_id
 
 
 class NavError(Exception):
