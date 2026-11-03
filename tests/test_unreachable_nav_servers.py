@@ -2,6 +2,7 @@ from datetime import timedelta
 from unittest.mock import MagicMock, patch
 
 from navsync.nav import ConnectionError
+from navsync.netbox import UpstreamDevices
 from navsync.parser import Device, Location, NavFetcher, Site
 from navsync.syncer import Syncer
 from navsync.utils import NavServerInfo
@@ -15,6 +16,7 @@ def make_syncer():
     syncer.netbox_api = MagicMock()
     syncer.tags = {"navsync": 1, "cnaas": 2}
     syncer.unreachable_nav_servers = {UNREACHABLE}
+    syncer.upstream_devices = UpstreamDevices({})
     return syncer
 
 
@@ -218,6 +220,17 @@ class TestRecordingNavServer:
 
         kwargs = syncer.netbox_api.dcim.devices.create.call_args.kwargs
         assert kwargs["custom_fields"]["nav_server"] == REACHABLE
+
+    def test_a_created_device_should_be_available_to_later_steps(self):
+        syncer = make_syncer()
+        syncer.get_or_create_device_type = MagicMock(return_value=MagicMock(id=3))
+        created = MagicMock()
+        created.name = "sw1"
+        syncer.netbox_api.dcim.devices.create.return_value = created
+
+        syncer._create_device(make_device(), MagicMock(id=1), MagicMock(id=2))
+
+        assert syncer.upstream_devices.get("sw1") is created
 
     def test_an_updated_device_should_record_its_nav_server(self):
         syncer = make_syncer()

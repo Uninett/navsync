@@ -1,6 +1,10 @@
 from unittest.mock import MagicMock
 
+import pytest
+from pynetbox.core.query import RequestError
+
 from navsync import netbox as netbox_helpers
+from navsync.netbox import UpstreamDevices
 
 
 def upstream_interface(name="Vlan10", device_id=100):
@@ -29,6 +33,67 @@ class TestGetDevices:
         api.dcim.devices.filter.return_value = []
         netbox_helpers.get_devices(api)
         api.dcim.devices.filter.assert_called_once_with(exclude="config_context")
+
+
+def upstream_device(name="sw1", primary_ip4=None, primary_ip6=None):
+    device = MagicMock()
+    device.name = name
+    device.primary_ip4 = MagicMock(id=primary_ip4) if primary_ip4 else None
+    device.primary_ip6 = MagicMock(id=primary_ip6) if primary_ip6 else None
+    return device
+
+
+def request_error():
+    response = MagicMock()
+    response.status_code = 400
+    response.json.return_value = {"name": ["invalid"]}
+    return RequestError(response)
+
+
+class TestUpstreamDevices:
+    def test_devices_should_be_fetched_once_and_keyed_by_name(self):
+        api = MagicMock()
+        device = upstream_device("sw1")
+        api.dcim.devices.filter.return_value = [device]
+        devices = UpstreamDevices.fetch(api)
+        assert devices.get("sw1") is device
+        assert devices.values() == [device]
+        api.dcim.devices.filter.assert_called_once()
+
+    def test_unknown_device_should_be_none(self):
+        assert UpstreamDevices({}).get("sw1") is None
+
+    def test_added_device_should_be_found(self):
+        devices = UpstreamDevices({})
+        device = upstream_device("sw1")
+        devices.add(device)
+        assert devices.get("sw1") is device
+        assert devices.values() == [device]
+
+    def test_device_holding_a_primary_ip_should_be_found(self):
+        holder = upstream_device("gw1", primary_ip4=55)
+        devices = UpstreamDevices({"sw1": upstream_device("sw1"), "gw1": holder})
+        assert devices.find_by_primary_ip("primary_ip4", 55) is holder
+
+    def test_primary_ip_should_only_be_looked_for_in_the_given_field(self):
+        holder = upstream_device("gw1", primary_ip6=55)
+        devices = UpstreamDevices({"gw1": holder})
+        assert devices.find_by_primary_ip("primary_ip4", 55) is None
+        assert devices.find_by_primary_ip("primary_ip6", 55) is holder
+
+    def test_saved_device_should_not_be_reloaded(self):
+        """pynetbox updates the record from the response to a save itself"""
+        device = upstream_device()
+        device.save.return_value = True
+        assert UpstreamDevices.save(device) is True
+        device.full_details.assert_not_called()
+
+    def test_device_should_be_reloaded_when_its_save_is_rejected(self):
+        device = upstream_device()
+        device.save.side_effect = request_error()
+        with pytest.raises(RequestError):
+            UpstreamDevices.save(device)
+        device.full_details.assert_called_once()
 
 
 class TestGetNavServers:

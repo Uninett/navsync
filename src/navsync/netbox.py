@@ -14,6 +14,7 @@ from ipaddress import ip_interface
 from typing import Iterable, Optional, Sequence
 
 import pynetbox.core.api as netbox
+from pynetbox.core.query import RequestError
 from pynetbox.core.response import Record
 
 from navsync.utils import (
@@ -83,6 +84,66 @@ def get_devices(api: netbox.Api) -> dict[NameStr, Record]:
         device.name: device
         for device in api.dcim.devices.filter(**WITHOUT_CONFIG_CONTEXT)
     }
+
+
+class UpstreamDevices:
+    """
+    The devices in Netbox, fetched once per sync and kept up to date as navsync
+    changes them, so that every step of the sync works on the same records.
+
+    pynetbox updates a record from Netbox's response whenever it is saved, so
+    the records stay current as long as every change to a device is saved
+    through :meth save:, and every device navsync creates is registered through
+    :meth add:.
+    """
+
+    def __init__(self, devices_by_name: dict[NameStr, Record]):
+        self._by_name = devices_by_name
+
+    @classmethod
+    def fetch(cls, api: netbox.Api) -> "UpstreamDevices":
+        """Fetches every device from Netbox"""
+        return cls(get_devices(api))
+
+    def get(self, name: NameStr) -> Optional[Record]:
+        """Returns the device with the given name, or None if there is none"""
+        return self._by_name.get(name)
+
+    def values(self) -> list[Record]:
+        """Returns every device"""
+        return list(self._by_name.values())
+
+    def add(self, device: Record):
+        """Registers a device that has been created in Netbox"""
+        self._by_name[device.name] = device
+
+    def find_by_primary_ip(self, field: str, ip_address_id: int) -> Optional[Record]:
+        """
+        Returns the device designating the given IP address as its primary IP
+        address in the given field ('primary_ip4' or 'primary_ip6'), or None if
+        no device does.
+        """
+        for device in self._by_name.values():
+            primary_ip = getattr(device, field, None)
+            if primary_ip and primary_ip.id == ip_address_id:
+                return device
+        return None
+
+    @staticmethod
+    def save(device: Record) -> bool:
+        """
+        Saves the changes made to the given device, returning whether there
+        were any.
+
+        If Netbox rejects the changes, the device is reloaded from Netbox
+        before the error is raised, so that the rejected changes are neither
+        mistaken for what is in Netbox nor sent again by a later save.
+        """
+        try:
+            return device.save()
+        except RequestError:
+            device.full_details()
+            raise
 
 
 def get_sites(api: netbox.Api) -> list[Record]:

@@ -43,6 +43,7 @@ class Syncer:
     https: bool
     nosync: bool
     unreachable_nav_servers: set[str]
+    upstream_devices: netbox_helpers.UpstreamDevices
 
     def __init__(
         self,
@@ -115,6 +116,9 @@ class Syncer:
         self.unreachable_nav_servers = nav_data.unreachable_nav_servers
 
         flat_locations = self._sync_sites_and_locations(nav_data.sites)
+        # Fetched once and kept up to date by every step below, since they all
+        # change devices
+        self.upstream_devices = netbox_helpers.UpstreamDevices.fetch(self.netbox_api)
         self._sync_devices(nav_data.devices, flat_locations)
         self._sync_assets(assets)
         self._sync_prefixes(nav_data.devices)
@@ -167,19 +171,18 @@ class Syncer:
 
     def _sync_virtual_chassis(self, chassis: dict[NameStr, VirtualChassis]):
         upstream_chassis = netbox_helpers.get_virtual_chassis(self.netbox_api)
-        upstream_devices = netbox_helpers.get_devices(self.netbox_api)
 
         self._delete_all_missing_virtual_chassis(
-            chassis, upstream_chassis, upstream_devices.values()
+            chassis, upstream_chassis, self.upstream_devices.values()
         )
         for virtual_chassis in chassis.values():
             upstream_virtual_chassis = upstream_chassis.get(virtual_chassis.name)
             if upstream_virtual_chassis:
                 self._update_virtual_chassis(
-                    virtual_chassis, upstream_virtual_chassis, upstream_devices
+                    virtual_chassis, upstream_virtual_chassis, self.upstream_devices
                 )
             else:
-                self._create_virtual_chassis(virtual_chassis, upstream_devices)
+                self._create_virtual_chassis(virtual_chassis, self.upstream_devices)
 
     def _delete_all_missing_virtual_chassis(
         self,
@@ -232,13 +235,14 @@ class Syncer:
                 _logger.debug(
                     f"Unregistering device {upstream_device.name} from virtual chassis {virtual_chassis.name}"
                 )
-                upstream_device.virtual_chassis.id = None
+                upstream_device.virtual_chassis = None
                 upstream_device.vc_position = None
-                upstream_device.save()
-                upstream_device.full_details()
+                self.upstream_devices.save(upstream_device)
 
     def _create_virtual_chassis(
-        self, virtual_chassis: VirtualChassis, upstream_devices: dict[NameStr, Record]
+        self,
+        virtual_chassis: VirtualChassis,
+        upstream_devices: netbox_helpers.UpstreamDevices,
     ):
         tag_ids = self._convert_tag_names_to_ids(
             virtual_chassis.tags + ["cnaas"], self.tags
@@ -266,7 +270,7 @@ class Syncer:
         self,
         virtual_chassis: VirtualChassis,
         upstream_virtual_chassis: Record,
-        upstream_devices: dict[NameStr, Record],
+        upstream_devices: netbox_helpers.UpstreamDevices,
     ):
         self._register_devices_as_members_of_vc(
             virtual_chassis.devices, upstream_devices, upstream_virtual_chassis
@@ -297,7 +301,6 @@ class Syncer:
                 )
 
     def _sync_assets(self, assets: dict[NameStr, Asset]):
-        upstream_devices_by_name = netbox_helpers.get_devices(self.netbox_api)
         upstream_assets = netbox_helpers.get_assets(self.netbox_api)
         upstream_asset_list = [
             asset
@@ -308,7 +311,7 @@ class Syncer:
         self._shelve_all_missing_assets(upstream_assets, assets.values())
 
         for device_name, asset in assets.items():
-            upstream_device = upstream_devices_by_name.get(device_name)
+            upstream_device = self.upstream_devices.get(device_name)
             if upstream_device is None:
                 _logger.error(
                     f"When syncing asset {asset.serial}, could not find its device "
@@ -447,16 +450,13 @@ class Syncer:
         devices: dict[NameStr, Device],
         flat_locations: dict[str, dict[NameStr, Record]],
     ):
-        upstream_devices_by_name = netbox_helpers.get_devices(self.netbox_api)
         upstream_sites = netbox_helpers.get_sites(self.netbox_api)
         upstream_device_roles_by_name = netbox_helpers.get_device_roles(self.netbox_api)
 
-        self._decommission_all_missing_devices(
-            devices, upstream_devices_by_name.values()
-        )
+        self._decommission_all_missing_devices(devices, self.upstream_devices.values())
 
         for device in devices.values():
-            upstream_device = upstream_devices_by_name.get(device.name)
+            upstream_device = self.upstream_devices.get(device.name)
             upstream_site = netbox_helpers.find_site(
                 upstream_sites,
                 name=device.location.site.name,
@@ -686,12 +686,11 @@ class Syncer:
             _logger.debug("No devices with interfaces to sync")
             return
 
-        upstream_devices_by_name = netbox_helpers.get_devices(self.netbox_api)
         upstream_interfaces = netbox_helpers.get_interfaces(self.netbox_api)
         upstream_ip_addresses = netbox_helpers.get_ip_addresses(self.netbox_api)
 
         for device_name, device in devices_with_interfaces.items():
-            upstream_device = upstream_devices_by_name.get(device_name)
+            upstream_device = self.upstream_devices.get(device_name)
             if upstream_device is None:
                 _logger.error(
                     f"Could not find device {device_name} when syncing its "
@@ -949,9 +948,7 @@ class Syncer:
 
         # The primary IP fields are one-to-one, so at most one device can
         # designate a given address as its primary IP
-        holder = self.netbox_api.dcim.devices.get(
-            **{f"{field}_id": upstream_ip_address.id}
-        )
+        holder = self.upstream_devices.find_by_primary_ip(field, upstream_ip_address.id)
         if holder is None:
             return
 
@@ -968,9 +965,7 @@ class Syncer:
         holder.tags = tag_ids
 
         try:
-            holder.save()
-            # Needs to be done to reset cached values for if fields have been modified
-            holder.full_details()
+            self.upstream_devices.save(holder)
         except RequestError as e:
             _logger.error(f"Failed to clear {field} of device {holder.name}: {str(e)}")
 
@@ -1000,9 +995,7 @@ class Syncer:
             f"{upstream_ip_address.address}"
         )
         try:
-            upstream_device.save()
-            # Needs to be done to reset cached values for if fields have been modified
-            upstream_device.full_details()
+            self.upstream_devices.save(upstream_device)
         except RequestError as e:
             _logger.error(
                 f"Failed to set {field} of device {upstream_device.name} to "
@@ -1045,7 +1038,7 @@ class Syncer:
             upstream_device.primary_ip4 = None
             upstream_device.primary_ip6 = None
             try:
-                upstream_device.save()
+                self.upstream_devices.save(upstream_device)
             except RequestError as e:
                 _logger.error(
                     f"Failed to decommission device {upstream_device.name}: {e}"
@@ -1112,9 +1105,11 @@ class Syncer:
 
         _logger.debug(f"Creating new device {device.name}")
         try:
-            self.netbox_api.dcim.devices.create(**new_device_dict)
+            created_device = self.netbox_api.dcim.devices.create(**new_device_dict)
         except RequestError as e:
             _logger.error(f"Failed to create device {device.name}: {str(e)}")
+            return
+        self.upstream_devices.add(created_device)
 
     def _update_device(
         self,
@@ -1159,7 +1154,7 @@ class Syncer:
                 f"Updating device {upstream_device.name}: {upstream_device.updates()}"
             )
             try:
-                upstream_device.save()
+                self.upstream_devices.save(upstream_device)
             except RequestError as e:
                 _logger.error(f"Failed to update device {device.name}: {str(e)}")
 
@@ -1551,7 +1546,7 @@ class Syncer:
     def _register_devices_as_members_of_vc(
         self,
         devices: Sequence[Device],
-        upstream_devices: dict[NameStr, Record],
+        upstream_devices: netbox_helpers.UpstreamDevices,
         virtual_chassis: Record,
     ):
         for device in devices:
@@ -1579,9 +1574,7 @@ class Syncer:
                     prior_stack_member.vc_position = None
                     prior_stack_member.virtual_chassis = None
                     try:
-                        prior_stack_member.save()
-                        # Needs to be done to reset cached values for if fields have been modified
-                        prior_stack_member.full_details()
+                        upstream_devices.save(prior_stack_member)
                         _logger.debug(
                             f"Unregistering device {prior_stack_member.name} from virtual chassis {virtual_chassis.name}"
                         )
@@ -1593,9 +1586,7 @@ class Syncer:
                 upstream_device.virtual_chassis = virtual_chassis.id
                 upstream_device.vc_position = device.vc_position
                 try:
-                    upstream_device.save()
-                    # Needs to be done to reset cached values for if fields have been modified
-                    upstream_device.full_details()
+                    upstream_devices.save(upstream_device)
                     _logger.debug(
                         f"Registering device {upstream_device.name} as part of virtual chassis {virtual_chassis.name} in position {upstream_device.vc_position}"
                     )
