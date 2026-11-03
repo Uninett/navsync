@@ -686,7 +686,14 @@ class Syncer:
             _logger.debug("No devices with interfaces to sync")
             return
 
-        upstream_interfaces = netbox_helpers.get_interfaces(self.netbox_api)
+        upstream_interfaces = netbox_helpers.get_interfaces(
+            self.netbox_api,
+            device_ids=[
+                upstream_device.id
+                for name in devices_with_interfaces
+                if (upstream_device := self.upstream_devices.get(name))
+            ],
+        )
         upstream_ip_addresses = netbox_helpers.get_ip_addresses(self.netbox_api)
 
         for device_name, device in devices_with_interfaces.items():

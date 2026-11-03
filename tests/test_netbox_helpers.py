@@ -141,12 +141,12 @@ class TestGetDeviceTypes:
 class TestGetInterfaces:
     def test_interfaces_should_be_keyed_by_device_id_and_name(self):
         api = MagicMock()
-        api.dcim.interfaces.all.return_value = [
+        api.dcim.interfaces.filter.return_value = [
             upstream_interface("Vlan10", device_id=100),
             upstream_interface("Vlan20", device_id=100),
             upstream_interface("Vlan10", device_id=200),
         ]
-        result = netbox_helpers.get_interfaces(api)
+        result = netbox_helpers.get_interfaces(api, device_ids=[100, 200])
         assert sorted(result[100]) == ["Vlan10", "Vlan20"]
         assert sorted(result[200]) == ["Vlan10"]
 
@@ -154,8 +154,34 @@ class TestGetInterfaces:
         api = MagicMock()
         orphan = upstream_interface()
         orphan.device = None
-        api.dcim.interfaces.all.return_value = [orphan]
-        assert netbox_helpers.get_interfaces(api) == {}
+        api.dcim.interfaces.filter.return_value = [orphan]
+        assert netbox_helpers.get_interfaces(api, device_ids=[100]) == {}
+
+    def test_only_interfaces_on_the_given_devices_should_be_fetched(self):
+        api = MagicMock()
+        api.dcim.interfaces.filter.return_value = []
+        netbox_helpers.get_interfaces(api, device_ids=[200, 100, 100])
+        api.dcim.interfaces.filter.assert_called_once_with(device_id=[100, 200])
+
+    def test_many_devices_should_be_split_across_requests(self):
+        api = MagicMock()
+        api.dcim.interfaces.filter.return_value = []
+        device_ids = range(netbox_helpers.FILTER_CHUNK_SIZE + 1)
+        netbox_helpers.get_interfaces(api, device_ids=device_ids)
+        chunks = [
+            call.kwargs["device_id"]
+            for call in api.dcim.interfaces.filter.call_args_list
+        ]
+        assert chunks == [
+            list(range(netbox_helpers.FILTER_CHUNK_SIZE)),
+            [netbox_helpers.FILTER_CHUNK_SIZE],
+        ]
+
+    def test_no_devices_should_mean_no_request(self):
+        """An empty filter would match every interface in Netbox"""
+        api = MagicMock()
+        assert netbox_helpers.get_interfaces(api, device_ids=[]) == {}
+        api.dcim.interfaces.filter.assert_not_called()
 
 
 class TestGetIpAddresses:

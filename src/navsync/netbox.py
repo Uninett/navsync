@@ -34,7 +34,17 @@ VERKTOYKASSE_ROLE = "verktykassecnaas"
 # VMs in Netbox, and navsync has no use for them, so they are left out
 WITHOUT_CONFIG_CONTEXT = {"exclude": "config_context"}
 
+# How many values to filter on in a single request, to keep URLs short
+FILTER_CHUNK_SIZE = 100
+
 _logger = logging.getLogger(__name__)
+
+
+def _chunks(values: Iterable, size: int = FILTER_CHUNK_SIZE) -> Iterable[list]:
+    """Splits the given values into lists of at most 'size' values each"""
+    values = list(values)
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
 
 
 def get_tenants(api: netbox.Api) -> dict[NameStr, Record]:
@@ -194,18 +204,22 @@ def get_assets(api: netbox.Api) -> dict[int, dict[SerialStr, Record]]:
     return assets
 
 
-def get_interfaces(api: netbox.Api) -> dict[int, dict[NameStr, Record]]:
+def get_interfaces(
+    api: netbox.Api, device_ids: Iterable[int]
+) -> dict[int, dict[NameStr, Record]]:
     """
-    Returns dict mapping device id to interface names and interfaces.
+    Returns dict mapping device id to interface names and interfaces, for the
+    interfaces on the given devices.
 
     Interface names are only unique within a device, so the device id is part of
-    the key. Interfaces that are not attached to a device are left out.
+    the key.
     """
     interfaces: dict[int, dict[NameStr, Record]] = {}
-    for interface in api.dcim.interfaces.all():
-        if not interface.device:
-            continue
-        interfaces.setdefault(interface.device.id, {})[interface.name] = interface
+    for chunk in _chunks(sorted(set(device_ids))):
+        for interface in api.dcim.interfaces.filter(device_id=chunk):
+            if not interface.device:
+                continue
+            interfaces.setdefault(interface.device.id, {})[interface.name] = interface
     return interfaces
 
 
