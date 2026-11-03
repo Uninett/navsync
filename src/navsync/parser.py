@@ -1,5 +1,4 @@
 import logging
-import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import IntEnum
@@ -33,6 +32,10 @@ NAV_TOKEN_ENDPOINTS = [
     "/api/1/gwportprefix",
     "/api/1/interface",
 ]
+
+# How far back in time tokens for NAV are dated, to allow for clock skew
+# between us and the NAV servers
+NAV_TOKEN_CLOCK_SKEW = timedelta(seconds=30)
 
 
 @dataclass
@@ -962,14 +965,9 @@ class NavFetcher:
             # Everything from a NAV server is fetched before any of it is kept,
             # so that a server failing halfway through contributes nothing
             try:
-                # Sleep to avoid issues with the `nbf` claim.
-                time.sleep(1)
                 server_sites, server_locations = LocationHierarchyParser(
                     nav_server, token
                 ).get_sites_and_locations()
-
-                # Sleep to avoid issues with the `nbf` claim.
-                time.sleep(1)
                 server_entities = EntityParser(
                     nav_server,
                     token,
@@ -1097,10 +1095,13 @@ class NavFetcher:
     def generate_nav_token(self, aud: str) -> str:
         """Returns a JWT granting read access to the NAV API at 'aud'"""
         now = datetime.now(timezone.utc)
+        # Backdate the token, so that a NAV server whose clock lags behind ours
+        # does not reject it as not yet valid
+        issued_at = now - NAV_TOKEN_CLOCK_SKEW
         jwt_claims = {
             "exp": (now + self.expiry_delta).timestamp(),
-            "nbf": now.timestamp(),
-            "iat": now.timestamp(),
+            "nbf": issued_at.timestamp(),
+            "iat": issued_at.timestamp(),
             "aud": aud,
             "iss": self.issuer,
             "token_type": "access",
