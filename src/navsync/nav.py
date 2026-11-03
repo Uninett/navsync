@@ -9,6 +9,10 @@ import requests
 
 _logger = getLogger(__name__)
 
+# The page size to request from Nav's API. Nav caps it at its own maximum, so
+# asking for more than that is harmless.
+PAGE_SIZE = 1000
+
 
 @dataclass
 class NavLocation:
@@ -236,11 +240,14 @@ class Api:
         )
 
         # Fill in each box's interfaces that have IP addresses assigned to them.
-        # This is looked up per box, since fetching all gateway port prefixes
-        # and interfaces would mean paging through far more data than is needed.
+        # All gateway port prefixes are fetched in one go, since there are far
+        # fewer of them than there are boxes to make a request for.
         start = time.time()
+        gwportprefixes_by_navbox_id = self._get_gwportprefixes_by_navbox_id()
         for box in box_by_id.values():
-            box.interfaces = self._get_interfaces_with_addresses(box._id)
+            box.interfaces = self._get_interfaces_with_addresses(
+                box._id, gwportprefixes_by_navbox_id.get(box._id, [])
+            )
             if not box.interfaces:
                 _logger.debug(
                     "Found no interfaces with IP addresses in %s for navbox %s",
@@ -332,7 +339,29 @@ class Api:
             entity_by_id[json["id"]] = entity
         return entity_by_id
 
-    def _get_interfaces_with_addresses(self, navbox_id: int) -> list[NavInterface]:
+    def _get_gwportprefixes_by_navbox_id(self) -> dict[int, list[dict]]:
+        """
+        Get all 'gwportprefix' model instances from Nav and return a map from
+        the id of the netbox they belong to, to their raw JSON.
+
+        Gateway port prefixes that cannot be tied to a netbox are left out.
+        """
+        gwportprefixes_by_navbox_id: dict[int, list[dict]] = {}
+        for json in self.get("gwportprefix/", params={"page_size": PAGE_SIZE}):
+            navbox_id = (json.get("interface") or {}).get("netbox")
+            if navbox_id is None:
+                _logger.debug(
+                    "Skipping gwportprefix from %s without a netbox: %r",
+                    self.base_url,
+                    json,
+                )
+                continue
+            gwportprefixes_by_navbox_id.setdefault(navbox_id, []).append(json)
+        return gwportprefixes_by_navbox_id
+
+    def _get_interfaces_with_addresses(
+        self, navbox_id: int, gwportprefixes: Iterable[dict]
+    ) -> list[NavInterface]:
         """
         Return every interface on the given netbox that has at least one IP
         address assigned to it, according to Nav's gwportprefix data.
@@ -342,13 +371,13 @@ class Api:
         a switch can have hundreds of them.
 
         :param navbox_id: the id of the netbox to get interfaces for
+        :param gwportprefixes: the raw JSON of the netbox's gateway port
+            prefixes, as returned by :meth _get_gwportprefixes_by_navbox_id:
         """
-        # One request yields every IP address on the netbox, grouped by the
-        # interface it belongs to. Filtering on the netbox also means Nav will
-        # never hand us an interface belonging to some other netbox.
+        # Group every IP address on the netbox by the interface it belongs to
         addresses_by_interface_id: dict[int, list[NavGwPortPrefix]] = {}
         ifindex_by_interface_id: dict[int, Optional[int]] = {}
-        for json in self.get("gwportprefix/", params={"interface__netbox": navbox_id}):
+        for json in gwportprefixes:
             interface_json = json.get("interface") or {}
             interface_id = interface_json.get("id")
             gw_ip = json.get("gw_ip")
