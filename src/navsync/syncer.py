@@ -144,7 +144,7 @@ class Syncer:
             private_key = f.read()
 
         return cls(
-            netbox_api=netbox.Api(url=netbox_url, token=netbox_token),
+            netbox_api=netbox.Api(url=netbox_url, token=netbox_token, threading=True),
             private_key=private_key,
             expiry_delta=expiry_delta,
             issuer=nav_iss_claim,
