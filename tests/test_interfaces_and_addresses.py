@@ -63,9 +63,7 @@ class TestGetGwportprefixesByNavboxId:
     def test_all_gwportprefixes_should_be_fetched_in_one_request(self):
         api = make_api([gwportprefix("10.0.0.1")])
         api._get_gwportprefixes_by_navbox_id()
-        api.get.assert_called_once_with(
-            "gwportprefix/", params={"page_size": PAGE_SIZE}
-        )
+        api.get.assert_called_once_with("gwportprefix/")
 
     def test_gwportprefixes_should_be_grouped_by_netbox(self):
         first = gwportprefix("10.0.0.1", navbox_id=10)
@@ -354,6 +352,26 @@ def make_api_with_session(status_code=200, json_body=None, url_seen=None):
 
     api.session.get = session_get
     return api
+
+
+class TestGet:
+    def test_a_large_page_size_should_be_requested(self):
+        url_seen = []
+        api = make_api_with_session(
+            json_body={"results": [], "next": None}, url_seen=url_seen
+        )
+        list(api.get("netbox/"))
+        assert url_seen == [
+            ("http://nav.example.org/api/1/netbox/", {"page_size": PAGE_SIZE})
+        ]
+
+    def test_params_should_be_sent_along_with_the_page_size(self):
+        url_seen = []
+        api = make_api_with_session(
+            json_body={"results": [], "next": None}, url_seen=url_seen
+        )
+        list(api.get("interface/", params={"netbox": 10}))
+        assert url_seen[0][1] == {"page_size": PAGE_SIZE, "netbox": 10}
 
 
 class TestGetSingle:

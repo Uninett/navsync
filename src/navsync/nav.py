@@ -149,8 +149,9 @@ class Api:
         }
 
     def get(self, path: str, params=None) -> Iterable[dict]:
-        """Sends a GET request to Nav's API"""
+        """Sends a GET request to Nav's API, following its pagination"""
         url = self.base_url + path.lstrip("/")
+        params = {"page_size": PAGE_SIZE, **(params or {})}
         while url:
             try:
                 response = self.session.get(url, params=params)
@@ -347,7 +348,7 @@ class Api:
         Gateway port prefixes that cannot be tied to a netbox are left out.
         """
         gwportprefixes_by_navbox_id: dict[int, list[dict]] = {}
-        for json in self.get("gwportprefix/", params={"page_size": PAGE_SIZE}):
+        for json in self.get("gwportprefix/"):
             navbox_id = (json.get("interface") or {}).get("netbox")
             if navbox_id is None:
                 _logger.debug(
