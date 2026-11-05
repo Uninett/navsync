@@ -24,6 +24,7 @@ def claims(private_key):
         expiry_delta=timedelta(hours=1),
         issuer="navsync",
         netbox_tenants={},
+        categories=[],
     )
     token = fetcher.generate_nav_token(aud="https://nav.example.org")
     return jwt.decode(token, options={"verify_signature": False})
