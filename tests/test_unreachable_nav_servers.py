@@ -252,7 +252,7 @@ class TestFetchingFromUnreachableNavServers:
                 )
             return parser
 
-        def entity_parser(nav_server, token, locations, netbox_tenants):
+        def entity_parser(nav_server, token, locations, netbox_tenants, categories):
             parser = MagicMock()
             if failing_parser == "EntityParser" and nav_server.url == UNREACHABLE:
                 parser.parse.side_effect = ConnectionError("down")
@@ -261,7 +261,11 @@ class TestFetchingFromUnreachableNavServers:
             return parser
 
         fetcher = NavFetcher(
-            private_key="", expiry_delta=timedelta(), issuer="", netbox_tenants={}
+            private_key="",
+            expiry_delta=timedelta(),
+            issuer="",
+            netbox_tenants={},
+            categories=[],
         )
         fetcher.generate_nav_token = lambda aud: "token"
         with (

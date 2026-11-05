@@ -3,7 +3,16 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from enum import IntEnum
 from ipaddress import ip_address, ip_network
-from typing import Callable, Iterable, Literal, NewType, Optional, Self, Sequence
+from typing import (
+    Callable,
+    Collection,
+    Iterable,
+    Literal,
+    NewType,
+    Optional,
+    Self,
+    Sequence,
+)
 from urllib.parse import urljoin
 
 import jwt
@@ -280,11 +289,13 @@ class EntityParser:
         nav_server_info: NavServerInfo,
         token: str,
         netbox_tenants: dict[str, int],
+        categories: Collection[str],
         locations: Optional[dict[str, Location]] = None,
     ):
         self._nav_api = Api(url=nav_server_info.url, token=token)
         self._navinfo = nav_server_info
         self._token = token
+        self._categories = categories
         self._org_tenant_resolver = OrgTenantResolver(
             nav_api=self._nav_api,
             default_tenant_id=nav_server_info.tenant_id,
@@ -314,6 +325,13 @@ class EntityParser:
 
         netbox_entities: list[Device | VirtualChassis] = []
         for navbox in navboxes:
+            if navbox.category not in self._categories:
+                _logger.debug(
+                    f"Navbox {navbox.sysname} has category {navbox.category!r} "
+                    "which is not configured to be synced. Skipping."
+                )
+                continue
+
             tenant_id = self._org_tenant_resolver.resolve(
                 navbox.organization_identifier
             )
@@ -934,6 +952,7 @@ class NavFetcher:
         expiry_delta: timedelta,
         issuer: str,
         netbox_tenants: dict[NameStr, int],
+        categories: Collection[str],
     ):
         """
         :param private_key: PEM-encoded RSA key used to sign tokens for the NAV
@@ -944,11 +963,13 @@ class NavFetcher:
             what the NAV instances are configured with
         :param netbox_tenants: maps Netbox tenant name to id, used to resolve
             which tenant a navbox's organization belongs to
+        :param categories: the NAV categories of navboxes to fetch, e.g. "SW"
         """
         self.private_key = private_key
         self.expiry_delta = expiry_delta
         self.issuer = issuer
         self.netbox_tenants = netbox_tenants
+        self.categories = categories
 
     def fetch(self, nav_servers: Iterable[NavServerInfo]) -> NavData:
         """
@@ -973,6 +994,7 @@ class NavFetcher:
                     token,
                     locations=server_locations,
                     netbox_tenants=self.netbox_tenants,
+                    categories=self.categories,
                 ).parse()
             except NavError as e:
                 _logger.error(

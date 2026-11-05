@@ -1,7 +1,7 @@
 import logging
 from datetime import timedelta
 from ipaddress import ip_address
-from typing import Optional, Sequence, Union
+from typing import Collection, Optional, Sequence, Union
 
 import pynetbox.core.api as netbox
 from dynaconf import Dynaconf
@@ -41,6 +41,7 @@ class Syncer:
     expiry_delta: timedelta
     issuer: str
     https: bool
+    categories: Collection[str]
     nosync: bool
     unreachable_nav_servers: set[str]
 
@@ -51,6 +52,7 @@ class Syncer:
         expiry_delta: timedelta,
         issuer: str,
         https: bool,
+        categories: Collection[str],
         nosync: bool,
     ):
         self.netbox_api = netbox_api
@@ -58,6 +60,7 @@ class Syncer:
         self.expiry_delta = expiry_delta
         self.issuer = issuer
         self.https = https
+        self.categories = categories
         self.nosync = nosync
         self.unreachable_nav_servers = set()
 
@@ -72,6 +75,7 @@ class Syncer:
             expiry_delta=self.expiry_delta,
             issuer=self.issuer,
             netbox_tenants={name: t.id for name, t in self.tenants.items()},
+            categories=self.categories,
         )
         nav_data = nav_fetcher.fetch(
             nav_servers=netbox_helpers.get_nav_servers(self.netbox_api, self.https)
@@ -149,6 +153,7 @@ class Syncer:
             expiry_delta=expiry_delta,
             issuer=nav_iss_claim,
             https=https,
+            categories=settings.nav.categories,
             nosync=nosync,
         )
 
