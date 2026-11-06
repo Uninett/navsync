@@ -8,38 +8,52 @@ from navsync.utils import init_logging
 
 EXAMPLE_CONFIG = """\
 [netbox]
-# The 'url' option specifies the URL of the Netbox instance for which navboxes
-# from NAV should be synced to.
-url="http://127.0.0.1:8080"
+# URL of the Netbox instance to sync into.
+url = "http://127.0.0.1:8080"
 
-# The 'token' option specifies an API token with read/write access to the Netbox
-# instance's 'DCIM', 'IPAM', 'Plugins (Inventory)', 'Virtualization' and
-# 'Tenancy' API endpoints
-token="0123456789"
+# An API token with read/write access to the Netbox instance's 'DCIM', 'IPAM',
+# 'Plugins (Inventory)', 'Virtualization', 'Tenancy' and 'Extras' API endpoints.
+token = "0123456789"
 
 [nav]
-# NAV instances to sync navboxes from are found by looking through
-# - the 'Device' entries in the Netbox instance, for any device with
-#   Role='Verktøykasse' AND Status='Active'
-# - the 'VM' entries in the Netbox instance, for any VM with Role='Verktøykasse'
-#   AND Status='Active'
+# Path to a PEM-encoded RSA private key used to sign the JWTs that authenticate
+# navsync towards the NAV API. The corresponding public key must be registered
+# with each NAV instance to be accessed.
+private_key_path = "/path/to/private_key.pem"
 
-# The 'private_key_path' option specifies a path to a PEM-encoded RSA private key
-# that will be used to sign JWTs used for authentication towards the NAV API.
-# The corresponding public key must be registered with the NAV instance(s) to be accessed.
-private_key_path="/tmp/private_key.pem"
+# How long (in seconds) a generated JWT should be valid for.
+expiry_delta = 3600
 
-# the 'expiry_delta' option specifies how long (in seconds) a JWT
-# should be valid for.
-expiry_delta=3600
+# Sets the 'iss' claim of generated tokens. Must match the value configured in
+# the NAV instances being synced against.
+issuer = "navsync"
 
-# `issuer` is used to set the `iss` claim for generated tokens. This must match
-# the value configured in the NAV instances you are syncing against
-issuer="navsync"\
+# If true, calls to the NAV APIs use https://, otherwise http://.
+https = true
 
-# If `https` is true, calls to the NAV APIs will use https://
-# If false, it will use http://
-https=true
+# Optional. Only NAV netboxes in these categories are synced. Defaults to all
+# categories.
+categories = ["GW", "GSW", "SW", "EDGE", "WLAN", "SRV", "OTHER", "ENV", "POWER"]
+
+[geocode]
+# Optional. If true, geocoding results are cached on disk so repeated runs don't
+# query Kartverket again for the same address. Defaults to false.
+cache_enabled = false
+
+# Optional. File used to cache geocoding results between runs. Defaults to
+# `geocode.json` in the user cache directory, e.g. ~/.cache/navsync/geocode.json.
+# The user running navsync must be able to write to it.
+cache_path = "~/.cache/navsync/geocode.json"
+
+# Optional. How long (in seconds) a geocoding result is cached, including when
+# an address was not found or was ambiguous. Defaults to 30 days.
+cache_ttl = 2592000
+
+# Optional. User-Agent header sent with requests to Kartverket, so they can
+# identify who is calling their API. Defaults to "navsync". You should probably
+# include a contact email address, e.g. "navsync (you@example.org)", so they can
+# reach you if your usage causes problems.
+user_agent = "navsync"
 """
 
 
@@ -59,10 +73,10 @@ def parse_args():
         "Configuration should be placed at "
         "'$CONFDIR/navsync/navsync.toml', where $CONFDIR is your "
         "system's default configuration directory, e.g. '~/.config'.\n\n"
-        "Example minimal configuration\n"
-        "-----------------------------\n"
-        f"{EXAMPLE_CONFIG}\n"
-        "-----------------------------\n"
+        "Example configuration\n"
+        "---------------------\n"
+        f"{EXAMPLE_CONFIG}"
+        "---------------------\n"
     )
     formatter = argparse.RawDescriptionHelpFormatter
     parser = argparse.ArgumentParser(formatter_class=formatter, description=description)
