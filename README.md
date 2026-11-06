@@ -64,9 +64,9 @@ issuer = "navsync"
 # If true, calls to the NAV APIs use https://, otherwise http://.
 https = true
 
-# Optional. Only NAV netboxes in these categories are synced. Defaults to
-# ["GW", "GSW", "SW", "EDGE"].
-categories = ["GW", "GSW", "SW", "EDGE"]
+# Optional. Only NAV netboxes in these categories are synced. Defaults to all
+# categories.
+categories = ["GW", "GSW", "SW", "EDGE", "WLAN", "SRV", "OTHER", "ENV", "POWER"]
 
 [geocode]
 # Optional. If true, geocoding results are cached on disk so repeated runs don't

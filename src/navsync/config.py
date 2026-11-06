@@ -19,7 +19,10 @@ settings = Dynaconf(
         Validator("nav.private_key_path", must_exist=True),
         Validator("nav.expiry_delta", must_exist=True),
         Validator("nav.issuer", must_exist=True),
-        Validator("nav.categories", default=["GW", "GSW", "SW", "EDGE"]),
+        Validator(
+            "nav.categories",
+            default=["GW", "GSW", "SW", "EDGE", "WLAN", "SRV", "OTHER", "ENV", "POWER"],
+        ),
         Validator("geocode.cache_enabled", default=False),
         Validator(
             "geocode.cache_path",
