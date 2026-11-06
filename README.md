@@ -37,57 +37,8 @@ standard user configuration directory — e.g.
 environment using the `NAVSYNC_` prefix, e.g. `NAVSYNC_NETBOX__TOKEN` can be used to
 configure the netbox token.
 
-A minimal configuration:
-
-```toml
-[netbox]
-# URL of the Netbox instance to sync into.
-url = "http://127.0.0.1:8080"
-
-# An API token with read/write access to the Netbox instance's 'DCIM', 'IPAM',
-# 'Plugins (Inventory)', 'Virtualization', 'Tenancy' and 'Extras' API endpoints.
-token = "0123456789"
-
-[nav]
-# Path to a PEM-encoded RSA private key used to sign the JWTs that authenticate
-# navsync towards the NAV API. The corresponding public key must be registered
-# with each NAV instance to be accessed.
-private_key_path = "/path/to/private_key.pem"
-
-# How long (in seconds) a generated JWT should be valid for.
-expiry_delta = 3600
-
-# Sets the 'iss' claim of generated tokens. Must match the value configured in
-# the NAV instances being synced against.
-issuer = "navsync"
-
-# If true, calls to the NAV APIs use https://, otherwise http://.
-https = true
-
-# Optional. Only NAV netboxes in these categories are synced. Defaults to
-# ["GW", "GSW", "SW", "EDGE"].
-categories = ["GW", "GSW", "SW", "EDGE"]
-
-[geocode]
-# Optional. If true, geocoding results are cached on disk so repeated runs don't
-# query Kartverket again for the same address. Defaults to false.
-cache_enabled = false
-
-# Optional. File used to cache geocoding results between runs. Defaults to
-# `geocode.json` in the user cache directory, e.g. ~/.cache/navsync/geocode.json.
-# The user running navsync must be able to write to it.
-cache_path = "~/.cache/navsync/geocode.json"
-
-# Optional. How long (in seconds) a geocoding result is cached, including when
-# an address was not found or was ambiguous. Defaults to 30 days.
-cache_ttl = 2592000
-
-# Optional. User-Agent header sent with requests to Kartverket, so they can
-# identify who is calling their API. Defaults to "navsync". You should probably
-# include a contact email address, e.g. "navsync (you@example.org)", so they can
-# reach you if your usage causes problems.
-user_agent = "navsync"
-```
+See [`navsync.example.toml`](navsync.example.toml) for an example
+configuration with all available options explained.
 
 ## Netbox prerequisites
 
