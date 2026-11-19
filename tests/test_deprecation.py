@@ -88,7 +88,7 @@ class TestDeprecateEmptyPrefixes:
         syncer = make_syncer()
         prefix = upstream_prefix()
         syncer.netbox_api.ipam.prefixes.filter.return_value = [prefix]
-        syncer.netbox_api.ipam.ip_addresses.count.return_value = 0
+        syncer.netbox_api.ipam.ip_addresses.filter.return_value = []
 
         syncer._deprecate_empty_prefixes()
 
@@ -100,25 +100,53 @@ class TestDeprecateEmptyPrefixes:
         syncer = make_syncer()
         prefix = upstream_prefix()
         syncer.netbox_api.ipam.prefixes.filter.return_value = [prefix]
-        syncer.netbox_api.ipam.ip_addresses.count.return_value = 3
+        syncer.netbox_api.ipam.ip_addresses.filter.return_value = [
+            upstream_ip_address("158.38.1.13/32")
+        ]
 
         syncer._deprecate_empty_prefixes()
 
         assert prefix.status == "Active"
         prefix.save.assert_not_called()
 
+    def test_only_the_prefix_holding_addresses_should_stay_active(self):
+        syncer = make_syncer()
+        used = upstream_prefix("158.38.1.0/24")
+        empty = upstream_prefix("158.38.2.0/24")
+        syncer.netbox_api.ipam.prefixes.filter.return_value = [used, empty]
+        syncer.netbox_api.ipam.ip_addresses.filter.return_value = [
+            upstream_ip_address("158.38.1.13/32")
+        ]
+
+        syncer._deprecate_empty_prefixes()
+
+        used.save.assert_not_called()
+        empty.save.assert_called_once()
+
+    def test_addresses_should_be_looked_up_once_for_all_prefixes(self):
+        syncer = make_syncer()
+        syncer.netbox_api.ipam.prefixes.filter.return_value = [
+            upstream_prefix("158.38.1.0/24"),
+            upstream_prefix("158.38.2.0/24"),
+        ]
+        syncer.netbox_api.ipam.ip_addresses.filter.return_value = []
+
+        syncer._deprecate_empty_prefixes()
+
+        syncer.netbox_api.ipam.ip_addresses.filter.assert_called_once()
+        syncer.netbox_api.ipam.ip_addresses.count.assert_not_called()
+
     def test_deprecated_addresses_should_not_keep_a_prefix_active(self):
         syncer = make_syncer()
         prefix = upstream_prefix()
         syncer.netbox_api.ipam.prefixes.filter.return_value = [prefix]
-        syncer.netbox_api.ipam.ip_addresses.count.return_value = 0
+        syncer.netbox_api.ipam.ip_addresses.filter.return_value = []
 
         syncer._deprecate_empty_prefixes()
 
-        assert syncer.netbox_api.ipam.ip_addresses.count.call_args.kwargs == {
-            "parent": "158.38.1.0/24",
-            "status__n": "deprecated",
-        }
+        kwargs = syncer.netbox_api.ipam.ip_addresses.filter.call_args.kwargs
+        assert kwargs["parent"] == ["158.38.1.0/24"]
+        assert kwargs["status__n"] == "deprecated"
 
     def test_an_already_deprecated_prefix_should_not_be_saved_again(self):
         syncer = make_syncer()

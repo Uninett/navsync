@@ -10,10 +10,11 @@ without a syncer instance.
 """
 
 import logging
-from ipaddress import ip_interface
+from ipaddress import ip_interface, ip_network
 from typing import Iterable, Optional, Sequence
 
 import pynetbox.core.api as netbox
+from pynetbox.core.query import RequestError
 from pynetbox.core.response import Record
 
 from navsync.utils import (
@@ -33,7 +34,17 @@ VERKTOYKASSE_ROLE = "verktykassecnaas"
 # VMs in Netbox, and navsync has no use for them, so they are left out
 WITHOUT_CONFIG_CONTEXT = {"exclude": "config_context"}
 
+# How many values to filter on in a single request, to keep URLs short
+FILTER_CHUNK_SIZE = 100
+
 _logger = logging.getLogger(__name__)
+
+
+def _chunks(values: Iterable, size: int = FILTER_CHUNK_SIZE) -> Iterable[list]:
+    """Splits the given values into lists of at most 'size' values each"""
+    values = list(values)
+    for start in range(0, len(values), size):
+        yield values[start : start + size]
 
 
 def get_tenants(api: netbox.Api) -> dict[NameStr, Record]:
@@ -48,26 +59,22 @@ def get_manufacturers(api: netbox.Api) -> dict[SlugStr, Record]:
     }
 
 
-def get_device_types_by_part_number(
+def get_device_types(
     api: netbox.Api,
-) -> dict[SlugStr, dict[str, Record]]:
-    """Returns dict mapping manufacturer slug to part numbers and device types"""
-    device_types: dict[SlugStr, dict[str, Record]] = {}
+) -> tuple[dict[SlugStr, dict[str, Record]], dict[SlugStr, dict[str, Record]]]:
+    """
+    Returns (by_part_number, by_model): manufacturer slug -> part number/model
+    -> device type.
+    """
+    by_part_number: dict[SlugStr, dict[str, Record]] = {}
+    by_model: dict[SlugStr, dict[str, Record]] = {}
     for device_type in api.dcim.device_types.all():
-        device_types.setdefault(device_type.manufacturer.slug, {})[
-            device_type.part_number
-        ] = device_type
-    return device_types
-
-
-def get_device_types_by_model(api: netbox.Api) -> dict[SlugStr, dict[str, Record]]:
-    """Returns dict mapping manufacturer slug to models and device types"""
-    device_types: dict[SlugStr, dict[str, Record]] = {}
-    for device_type in api.dcim.device_types.all():
-        device_types.setdefault(device_type.manufacturer.slug, {})[
-            device_type.model
-        ] = device_type
-    return device_types
+        manufacturer_slug = device_type.manufacturer.slug
+        by_part_number.setdefault(manufacturer_slug, {})[device_type.part_number] = (
+            device_type
+        )
+        by_model.setdefault(manufacturer_slug, {})[device_type.model] = device_type
+    return by_part_number, by_model
 
 
 def get_device_roles(api: netbox.Api) -> dict[NameStr, Record]:
@@ -83,6 +90,66 @@ def get_devices(api: netbox.Api) -> dict[NameStr, Record]:
         device.name: device
         for device in api.dcim.devices.filter(**WITHOUT_CONFIG_CONTEXT)
     }
+
+
+class UpstreamDevices:
+    """
+    The devices in Netbox, fetched once per sync and kept up to date as navsync
+    changes them, so that every step of the sync works on the same records.
+
+    pynetbox updates a record from Netbox's response whenever it is saved, so
+    the records stay current as long as every change to a device is saved
+    through :meth save:, and every device navsync creates is registered through
+    :meth add:.
+    """
+
+    def __init__(self, devices_by_name: dict[NameStr, Record]):
+        self._by_name = devices_by_name
+
+    @classmethod
+    def fetch(cls, api: netbox.Api) -> "UpstreamDevices":
+        """Fetches every device from Netbox"""
+        return cls(get_devices(api))
+
+    def get(self, name: NameStr) -> Optional[Record]:
+        """Returns the device with the given name, or None if there is none"""
+        return self._by_name.get(name)
+
+    def values(self) -> list[Record]:
+        """Returns every device"""
+        return list(self._by_name.values())
+
+    def add(self, device: Record):
+        """Registers a device that has been created in Netbox"""
+        self._by_name[device.name] = device
+
+    def find_by_primary_ip(self, field: str, ip_address_id: int) -> Optional[Record]:
+        """
+        Returns the device designating the given IP address as its primary IP
+        address in the given field ('primary_ip4' or 'primary_ip6'), or None if
+        no device does.
+        """
+        for device in self._by_name.values():
+            primary_ip = getattr(device, field, None)
+            if primary_ip and primary_ip.id == ip_address_id:
+                return device
+        return None
+
+    @staticmethod
+    def save(device: Record) -> bool:
+        """
+        Saves the changes made to the given device, returning whether there
+        were any.
+
+        If Netbox rejects the changes, the device is reloaded from Netbox
+        before the error is raised, so that the rejected changes are neither
+        mistaken for what is in Netbox nor sent again by a later save.
+        """
+        try:
+            return device.save()
+        except RequestError:
+            device.full_details()
+            raise
 
 
 def get_sites(api: netbox.Api) -> list[Record]:
@@ -137,25 +204,29 @@ def get_assets(api: netbox.Api) -> dict[int, dict[SerialStr, Record]]:
     return assets
 
 
-def get_interfaces(api: netbox.Api) -> dict[int, dict[NameStr, Record]]:
+def get_interfaces(
+    api: netbox.Api, device_ids: Iterable[int]
+) -> dict[int, dict[NameStr, Record]]:
     """
-    Returns dict mapping device id to interface names and interfaces.
+    Returns dict mapping device id to interface names and interfaces, for the
+    interfaces on the given devices.
 
     Interface names are only unique within a device, so the device id is part of
-    the key. Interfaces that are not attached to a device are left out.
+    the key.
     """
     interfaces: dict[int, dict[NameStr, Record]] = {}
-    for interface in api.dcim.interfaces.all():
-        if not interface.device:
-            continue
-        interfaces.setdefault(interface.device.id, {})[interface.name] = interface
+    for chunk in _chunks(sorted(set(device_ids))):
+        for interface in api.dcim.interfaces.filter(device_id=chunk):
+            if not interface.device:
+                continue
+            interfaces.setdefault(interface.device.id, {})[interface.name] = interface
     return interfaces
 
 
-def get_ip_addresses(api: netbox.Api) -> dict[str, Record]:
+def get_ip_addresses(api: netbox.Api, hosts: Iterable[str]) -> dict[str, Record]:
     """
     Returns dict mapping host address (without mask, e.g. '10.0.0.1') to IP
-    address.
+    address, for the given host addresses that are registered in Netbox.
 
     Netbox enforces uniqueness on the host address, not on the address together
     with its mask, so '10.0.0.1/24' and '10.0.0.1/32' are the same address to
@@ -163,14 +234,18 @@ def get_ip_addresses(api: netbox.Api) -> dict[str, Record]:
     in NAV is recognized, instead of being created again and rejected as a
     duplicate.
 
+    Netbox matches host addresses given without a mask against the host part of
+    its addresses, so an address is found whatever mask it is registered with.
+
     Addresses that cannot be parsed are left out.
     """
     ip_addresses: dict[str, Record] = {}
-    for ip_address in api.ipam.ip_addresses.all():
-        host = host_address(str(ip_address.address))
-        if host is None:
-            continue
-        ip_addresses[host] = ip_address
+    for chunk in _chunks(sorted(set(hosts))):
+        for ip_address in api.ipam.ip_addresses.filter(address=chunk):
+            host = host_address(str(ip_address.address))
+            if host is None:
+                continue
+            ip_addresses[host] = ip_address
     return ip_addresses
 
 
@@ -184,6 +259,43 @@ def host_address(address: str) -> Optional[str]:
     except ValueError:
         _logger.warning("Could not parse IP address %r", address)
         return None
+
+
+def get_prefixes_in_use(api: netbox.Api, prefixes: Iterable[str]) -> set[str]:
+    """
+    Returns which of the given prefixes (e.g. '158.38.1.0/24') hold at least one
+    IP address that is not deprecated, no matter who registered it.
+
+    Prefixes that cannot be parsed are left out.
+    """
+    prefix_by_network = {}
+    for prefix in prefixes:
+        try:
+            prefix_by_network[ip_network(prefix, strict=False)] = prefix
+        except ValueError:
+            _logger.warning("Could not parse prefix %r", prefix)
+    prefix_lengths_by_version: dict[int, set[int]] = {}
+    for network in prefix_by_network:
+        prefix_lengths_by_version.setdefault(network.version, set()).add(
+            network.prefixlen
+        )
+
+    in_use: set[str] = set()
+    for chunk in _chunks(sorted(prefix_by_network.values())):
+        for upstream_ip_address in api.ipam.ip_addresses.filter(
+            parent=chunk, status__n="deprecated", brief=1
+        ):
+            host = host_address(str(upstream_ip_address.address))
+            if host is None:
+                continue
+            ip = ip_interface(host).ip
+            # An address can sit in several of the prefixes, e.g. both a /16
+            # and a /24 inside it
+            for prefix_length in prefix_lengths_by_version.get(ip.version, ()):
+                network = ip_network(f"{ip}/{prefix_length}", strict=False)
+                if network in prefix_by_network:
+                    in_use.add(prefix_by_network[network])
+    return in_use
 
 
 def get_prefixes(api: netbox.Api) -> dict[str, Record]:
